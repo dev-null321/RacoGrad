@@ -88,7 +88,10 @@
 
 ;; Check for OpenCL support
 (define (has-opencl-support?)
-  (and opencl-lib (= (check-opencl-available) 1)))
+  (with-handlers ([exn:fail? (lambda (e) #f)])
+    (and opencl-lib
+         (procedure? check-opencl-available)
+         (= (check-opencl-available) 1))))
 
 ;; Check for Apple Silicon (M1/M2/M3)
 (define (detect-apple-silicon)
@@ -102,23 +105,27 @@
 
 ;; Check for MLX availability on Apple Silicon
 (define (has-mlx-support?)
-  (and (detect-apple-silicon)
-       ;; Check for MLX library in standard locations
-       (or mlx-lib 
-           (with-handlers ([exn:fail? (lambda (e) #f)])
-             (file-exists? "/opt/homebrew/lib/libmlx.dylib"))
-           (with-handlers ([exn:fail? (lambda (e) #f)])
-             (file-exists? "/usr/local/lib/libmlx.dylib"))
-           (with-handlers ([exn:fail? (lambda (e) #f)])
-             (file-exists? "/usr/lib/libmlx.dylib")))
-       ;; Fall back to environment variable check
-       (or (= (check-mlx-available) 1)
-           (getenv "MLX_AVAILABLE"))))
+  (with-handlers ([exn:fail? (lambda (e) #f)])
+    (and (detect-apple-silicon)
+         ;; Check for MLX library in standard locations
+         (or mlx-lib 
+             (with-handlers ([exn:fail? (lambda (e) #f)])
+               (file-exists? "/opt/homebrew/lib/libmlx.dylib"))
+             (with-handlers ([exn:fail? (lambda (e) #f)])
+               (file-exists? "/usr/local/lib/libmlx.dylib"))
+             (with-handlers ([exn:fail? (lambda (e) #f)])
+               (file-exists? "/usr/lib/libmlx.dylib")))
+         ;; Fall back to environment variable check
+         (or (and (procedure? check-mlx-available)
+                  (= (check-mlx-available) 1))
+             (getenv "MLX_AVAILABLE")))))
 
 ;; Check for CUDA availability
 (define (has-cuda-support?)
-  (and cuda-lib 
-       (= (check-cuda-available) 1)))
+  (with-handlers ([exn:fail? (lambda (e) #f)])
+    (and cuda-lib 
+         (procedure? check-cuda-available)
+         (= (check-cuda-available) 1))))
 
 ;; Memory size detection (in GB)
 (define (detect-memory-size)
@@ -175,34 +182,38 @@
 (define (is-apple-silicon?)
   (hash-ref hardware-info 'apple-silicon))
 
-;; Print hardware information
+;; Print hardware information with error handling
 (define (print-hardware-info)
-  (define info hardware-info)
-  (printf "======================================\n")
-  (printf "Hardware Capabilities for RacoGrad\n")
-  (printf "======================================\n")
-  (printf "CPU Cores: ~a\n" (hash-ref info 'cores))
-  (printf "AVX Support: ~a\n" (hash-ref info 'avx))
-  (printf "SSE Support: ~a\n" (hash-ref info 'sse))
-  (printf "OpenCL Available: ~a\n" (hash-ref info 'opencl))
-  (printf "Apple Silicon: ~a\n" (hash-ref info 'apple-silicon))
-  (printf "MLX Support: ~a\n" (hash-ref info 'mlx))
-  (printf "CUDA Support: ~a\n" (hash-ref info 'cuda))
-  (printf "System Memory: ~a GB\n" (hash-ref info 'memory))
-  (printf "--------------------------------------\n")
-  (printf "Recommended Configuration:\n")
-  (cond
-    [(hash-ref info 'mlx)
-     (printf "- Use MLX acceleration for Apple Silicon\n")]
-    [(hash-ref info 'cuda)
-     (printf "- Use CUDA acceleration for NVIDIA GPUs\n")]
-    [(hash-ref info 'opencl)
-     (printf "- Use OpenCL acceleration for cross-platform GPU support\n")]
-    [(hash-ref info 'avx)
-     (printf "- Use AVX-optimized functions\n")]
-    [(hash-ref info 'sse)
-     (printf "- Use SSE-optimized functions\n")]
-    [else
-     (printf "- Use basic C optimizations\n")])
-  (printf "- Use ~a threads for parallel operations\n" (hash-ref info 'cores))
-  (printf "======================================\n"))
+  (with-handlers ([exn:fail? (lambda (e)
+                             (printf "======================================\n")
+                             (printf "Error detecting hardware capabilities: ~a\n" (exn-message e))
+                             (printf "======================================\n"))])
+    (define info hardware-info)
+    (printf "======================================\n")
+    (printf "Hardware Capabilities for RacoGrad\n")
+    (printf "======================================\n")
+    (printf "CPU Cores: ~a\n" (hash-ref info 'cores 4))
+    (printf "AVX Support: ~a\n" (hash-ref info 'avx #f))
+    (printf "SSE Support: ~a\n" (hash-ref info 'sse #f))
+    (printf "OpenCL Available: ~a\n" (hash-ref info 'opencl #f))
+    (printf "Apple Silicon: ~a\n" (hash-ref info 'apple-silicon #f))
+    (printf "MLX Support: ~a\n" (hash-ref info 'mlx #f))
+    (printf "CUDA Support: ~a\n" (hash-ref info 'cuda #f))
+    (printf "System Memory: ~a GB\n" (hash-ref info 'memory 8.0))
+    (printf "--------------------------------------\n")
+    (printf "Recommended Configuration:\n")
+    (cond
+      [(hash-ref info 'mlx #f)
+       (printf "- Use MLX acceleration for Apple Silicon\n")]
+      [(hash-ref info 'cuda #f)
+       (printf "- Use CUDA acceleration for NVIDIA GPUs\n")]
+      [(hash-ref info 'opencl #f)
+       (printf "- Use OpenCL acceleration for cross-platform GPU support\n")]
+      [(hash-ref info 'avx #f)
+       (printf "- Use AVX-optimized functions\n")]
+      [(hash-ref info 'sse #f)
+       (printf "- Use SSE-optimized functions\n")]
+      [else
+       (printf "- Use basic C optimizations\n")])
+    (printf "- Use ~a threads for parallel operations\n" (hash-ref info 'cores 4))
+    (printf "======================================\n")))

@@ -340,92 +340,179 @@
 
 ;; Function to load CIFAR-10 data
 ;; This implementation uses MNIST as a substitute since we already have that loaded
+;; With robust error handling to fallback to random data if MNIST is not available
 (define (load-cifar10)
   (printf "Loading MNIST data as substitute for CIFAR-10...~n")
   
   (define (read-idx3-ubyte filename)
-    (let* ([p (open-input-file filename #:mode 'binary)]
-           [magic-number (integer-bytes->integer (read-bytes 4 p) #f #t)]
-           [num-images (integer-bytes->integer (read-bytes 4 p) #f #t)]
-           [num-rows (integer-bytes->integer (read-bytes 4 p) #f #t)]
-           [num-cols (integer-bytes->integer (read-bytes 4 p) #f #t)]
-           [data (make-vector (* num-images num-rows num-cols) 0)])
-      (for ([i (in-range (vector-length data))])
-        (vector-set! data i (/ (read-byte p) 255.0))) ; Normalize to [0,1]
-      (close-input-port p)
-      data))
+    (with-handlers ([exn:fail? (lambda (e)
+                                (printf "Warning: Could not read MNIST images from ~a: ~a~n" 
+                                        filename (exn-message e))
+                                #f)])
+      (let* ([p (open-input-file filename #:mode 'binary)]
+             [magic-number (integer-bytes->integer (read-bytes 4 p) #f #t)]
+             [num-images (integer-bytes->integer (read-bytes 4 p) #f #t)]
+             [num-rows (integer-bytes->integer (read-bytes 4 p) #f #t)]
+             [num-cols (integer-bytes->integer (read-bytes 4 p) #f #t)]
+             [data (make-vector (* num-images num-rows num-cols) 0)])
+        (for ([i (in-range (vector-length data))])
+          (vector-set! data i (/ (read-byte p) 255.0))) ; Normalize to [0,1]
+        (close-input-port p)
+        data)))
   
   (define (read-idx1-ubyte filename)
-    (let* ([p (open-input-file filename #:mode 'binary)]
-           [magic-number (integer-bytes->integer (read-bytes 4 p) #f #t)]
-           [num-items (integer-bytes->integer (read-bytes 4 p) #f #t)]
-           [data (make-vector num-items 0)])
-      (for ([i (in-range num-items)])
-        (vector-set! data i (read-byte p)))
-      (close-input-port p)
-      data))
+    (with-handlers ([exn:fail? (lambda (e)
+                                (printf "Warning: Could not read MNIST labels from ~a: ~a~n" 
+                                        filename (exn-message e))
+                                #f)])
+      (let* ([p (open-input-file filename #:mode 'binary)]
+             [magic-number (integer-bytes->integer (read-bytes 4 p) #f #t)]
+             [num-items (integer-bytes->integer (read-bytes 4 p) #f #t)]
+             [data (make-vector num-items 0)])
+        (for ([i (in-range num-items)])
+          (vector-set! data i (read-byte p)))
+        (close-input-port p)
+        data)))
   
   (define (one-hot y num-classes)
+    (when (not y)
+      (error 'one-hot "Cannot one-hot encode null input"))
     (let* ([num-samples (vector-length y)]
            [encoded (make-vector (* num-samples num-classes) 0.0)])
       (for ([i (in-range num-samples)])
         (vector-set! encoded (+ (* i num-classes) (vector-ref y i)) 1.0))
       encoded))
   
-  (let* ([base-path "/Users/marq/Documents/racograd/mnist-data/"]
-         [train-images-file (string-append base-path "train-images.idx3-ubyte")]
-         [train-labels-file (string-append base-path "train-labels.idx1-ubyte")]
-         [test-images-file (string-append base-path "t10k-images.idx3-ubyte")]
-         [test-labels-file (string-append base-path "t10k-labels.idx1-ubyte")]
-         
-         ;; Load and format train data
-         [train-images-data (read-idx3-ubyte train-images-file)]
-         [train-labels-data (read-idx1-ubyte train-labels-file)]
-         [train-labels-onehot (one-hot train-labels-data 10)]
-         
-         ;; Load and format test data
-         [test-images-data (read-idx3-ubyte test-images-file)]
-         [test-labels-data (read-idx1-ubyte test-labels-file)]
-         [test-labels-onehot (one-hot test-labels-data 10)]
-         
-         ;; Create device tensors
-         [dev (current-device)]
-         [train-size 1000]   ; Using smaller subset for testing
-         [test-size 500]     ; Using smaller subset for testing
-         
-         ;; For CNN, reshape to 4D: [batch_size, channels, height, width]
-         ;; MNIST is grayscale so we duplicate to 3 channels for CNN
-         [train-images-reshaped (make-vector (* train-size 3 28 28) 0.0)]
-         [test-images-reshaped (make-vector (* test-size 3 28 28) 0.0)]
-         
-         ;; Copy the same grayscale data to each channel
-         [_ (for ([i (in-range train-size)])
-             (let ([img-offset (* i 784)])
-               (for ([pixel (in-range 784)])
-                 (let ([pixel-value (vector-ref train-images-data (+ img-offset pixel))])
-                   (for ([c (in-range 3)])
-                     (vector-set! train-images-reshaped 
-                                (+ (* i 3 28 28) (* c 28 28) pixel) 
-                                pixel-value))))))]
-         
-         [_ (for ([i (in-range test-size)])
-             (let ([img-offset (* i 784)])
-               (for ([pixel (in-range 784)])
-                 (let ([pixel-value (vector-ref test-images-data (+ img-offset pixel))])
-                   (for ([c (in-range 3)])
-                     (vector-set! test-images-reshaped 
-                                (+ (* i 3 28 28) (* c 28 28) pixel) 
-                                pixel-value))))))]
-         
-         ;; Create tensors with device support
-         [train-images (dt:create (list train-size 3 28 28) train-images-reshaped dev)]
-         [train-labels (dt:create (list train-size 10) train-labels-onehot dev)]
-         [test-images (dt:create (list test-size 3 28 28) test-images-reshaped dev)]
-         [test-labels (dt:create (list test-size 10) test-labels-onehot dev)])
-    
-    (printf "Loaded MNIST: ~a training images, ~a test images~n" 
-            train-size test-size)
-    (values train-images train-labels test-images test-labels)))
+  ;; Try to load MNIST data but fallback to random data if needed
+  (with-handlers 
+    ([exn:fail? 
+      (lambda (e)
+        (printf "Error loading MNIST data: ~a~nFalling back to random data.~n" (exn-message e))
+        (let* ([train-size 100]
+               [test-size 20]
+               [dev (current-device)]
+               
+               ;; Generate random data
+               [train-images (dt:random (list train-size 3 28 28) 1.0 dev)]
+               [train-labels-data (make-vector (* train-size 10) 0.0)]
+               [test-images (dt:random (list test-size 3 28 28) 1.0 dev)]
+               [test-labels-data (make-vector (* test-size 10) 0.0)])
+          
+          ;; Generate one-hot labels (1 in a random position for each example)
+          (for ([i (in-range train-size)])
+            (vector-set! train-labels-data 
+                         (+ (* i 10) (random 10)) 
+                         1.0))
+          
+          (for ([i (in-range test-size)])
+            (vector-set! test-labels-data 
+                         (+ (* i 10) (random 10)) 
+                         1.0))
+          
+          (let ([train-labels (dt:create (list train-size 10) train-labels-data dev)]
+                [test-labels (dt:create (list test-size 10) test-labels-data dev)])
+            
+            (printf "Created random data: ~a training images, ~a test images~n" 
+                    train-size test-size)
+            (values train-images train-labels test-images test-labels))))])
+  
+    ;; Try to locate the MNIST data - first check in the proper location
+    (let* ([base-paths 
+            (list 
+             "/Users/marq/Documents/racograd_clean/mnist-data/"
+             "/Users/marq/Documents/racograd/mnist-data/"
+             "./mnist-data/"
+             "../mnist-data/")]
+           [found-path #f])
+      
+      ;; Look for the data files in each potential location
+      (for ([path base-paths] #:when (not found-path))
+        (when (and (file-exists? (string-append path "train-images.idx3-ubyte"))
+                   (file-exists? (string-append path "train-labels.idx1-ubyte"))
+                   (file-exists? (string-append path "t10k-images.idx3-ubyte"))
+                   (file-exists? (string-append path "t10k-labels.idx1-ubyte")))
+          (set! found-path path)))
+      
+      (if found-path
+          (let* ([train-images-file (string-append found-path "train-images.idx3-ubyte")]
+                 [train-labels-file (string-append found-path "train-labels.idx1-ubyte")]
+                 [test-images-file (string-append found-path "t10k-images.idx3-ubyte")]
+                 [test-labels-file (string-append found-path "t10k-labels.idx1-ubyte")]
+                 
+                 ;; Load and format train data
+                 [train-images-data (read-idx3-ubyte train-images-file)]
+                 [train-labels-data (read-idx1-ubyte train-labels-file)])
+            
+            ;; If we couldn't read the data, fall back to random
+            (when (or (not train-images-data) (not train-labels-data))
+              (error 'load-cifar10 "Failed to read MNIST training data"))
+            
+            (let* ([test-images-data (read-idx3-ubyte test-images-file)]
+                   [test-labels-data (read-idx1-ubyte test-labels-file)])
+              
+              ;; If we couldn't read the test data, fall back to random
+              (when (or (not test-images-data) (not test-labels-data))
+                (error 'load-cifar10 "Failed to read MNIST test data"))
+              
+              (let* ([train-labels-onehot (one-hot train-labels-data 10)]
+                     [test-labels-onehot (one-hot test-labels-data 10)]
+                     
+                     ;; Create device tensors
+                     [dev (current-device)]
+                     [train-size 1000]   ; Using smaller subset for testing
+                     [test-size 500]     ; Using smaller subset for testing
+                     
+                     ;; For CNN, reshape to 4D: [batch_size, channels, height, width]
+                     ;; MNIST is grayscale so we duplicate to 3 channels for CNN
+                     [train-images-reshaped (make-vector (* train-size 3 28 28) 0.0)]
+                     [test-images-reshaped (make-vector (* test-size 3 28 28) 0.0)])
+                
+                ;; Copy the same grayscale data to each channel
+                (for ([i (in-range train-size)])
+                  (let ([img-offset (* i 784)])
+                    (for ([pixel (in-range 784)])
+                      (let ([pixel-value (vector-ref train-images-data (+ img-offset pixel))])
+                        (for ([c (in-range 3)])
+                          (vector-set! train-images-reshaped 
+                                     (+ (* i 3 28 28) (* c 28 28) pixel) 
+                                     pixel-value))))))
+                
+                (for ([i (in-range test-size)])
+                  (let ([img-offset (* i 784)])
+                    (for ([pixel (in-range 784)])
+                      (let ([pixel-value (vector-ref test-images-data (+ img-offset pixel))])
+                        (for ([c (in-range 3)])
+                          (vector-set! test-images-reshaped 
+                                     (+ (* i 3 28 28) (* c 28 28) pixel) 
+                                     pixel-value))))))
+                
+                ;; Create tensors with device support
+                (let ([train-images (dt:create (list train-size 3 28 28) train-images-reshaped dev)]
+                      [train-labels (dt:create (list train-size 10) 
+                                              (make-vector (* train-size 10) 0.0) dev)]
+                      [test-images (dt:create (list test-size 3 28 28) test-images-reshaped dev)]
+                      [test-labels (dt:create (list test-size 10) 
+                                            (make-vector (* test-size 10) 0.0) dev)])
+                  
+                  ;; Extract label data for our smaller subset
+                  (for ([i (in-range train-size)])
+                    (for ([j (in-range 10)])
+                      (vector-set! (dt:data train-labels)
+                                  (+ (* i 10) j)
+                                  (vector-ref train-labels-onehot (+ (* i 10) j)))))
+                  
+                  (for ([i (in-range test-size)])
+                    (for ([j (in-range 10)])
+                      (vector-set! (dt:data test-labels)
+                                  (+ (* i 10) j)
+                                  (vector-ref test-labels-onehot (+ (* i 10) j)))))
+                  
+                  (printf "Loaded MNIST: ~a training images, ~a test images~n" 
+                          train-size test-size)
+                  (values train-images train-labels test-images test-labels)))))
+          
+          ;; No MNIST data found in any location
+          (error 'load-cifar10 "Could not find MNIST data files in any standard location")))))
 
 ;; Get a batch of data using efficient tensor slicing
 (define (get-batch images labels batch-size start-idx)

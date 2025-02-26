@@ -12,8 +12,10 @@
          has-cuda-support?
          print-hardware-info)
 
-;; Define FFI for hardware detection
-(define libcheck (ffi-lib "simd_ops"))
+;; Safely try to load the libraries with proper error handling
+(define libcheck 
+  (with-handlers ([exn:fail? (lambda (e) #f)])
+    (ffi-lib "simd_ops" '("" "0"))))
 
 ;; Safely try to load the libraries and their availability checks
 (define opencl-lib 
@@ -101,8 +103,17 @@
 ;; Check for MLX availability on Apple Silicon
 (define (has-mlx-support?)
   (and (detect-apple-silicon)
-       mlx-lib
-       (= (check-mlx-available) 1)))
+       ;; Check for MLX library in standard locations
+       (or mlx-lib 
+           (with-handlers ([exn:fail? (lambda (e) #f)])
+             (file-exists? "/opt/homebrew/lib/libmlx.dylib"))
+           (with-handlers ([exn:fail? (lambda (e) #f)])
+             (file-exists? "/usr/local/lib/libmlx.dylib"))
+           (with-handlers ([exn:fail? (lambda (e) #f)])
+             (file-exists? "/usr/lib/libmlx.dylib")))
+       ;; Fall back to environment variable check
+       (or (= (check-mlx-available) 1)
+           (getenv "MLX_AVAILABLE"))))
 
 ;; Check for CUDA availability
 (define (has-cuda-support?)

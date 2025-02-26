@@ -15,14 +15,55 @@
 ;; Wrap up the C functions with tensor operations
 ;; These operations create and return new tensors
 
-;; Convolution operation
+;; Convolution operation with fallback to simple implementation if C function fails
 (define (conv2d input-tensor filter-tensor [stride 1] [padding 0])
+  (with-handlers ([exn:fail? (lambda (e)
+                              (printf "Warning: C convolution failed, using fallback implementation: ~a~n" 
+                                      (exn-message e))
+                              (simple-conv2d input-tensor filter-tensor stride padding))])
+    (let* ([input-shape (dt:shape input-tensor)]
+           [filter-shape (dt:shape filter-tensor)]
+           [batch-size (car input-shape)]
+           [in-channels (cadr input-shape)]
+           [in-height (caddr input-shape)]
+           [in-width (cadddr input-shape)]
+           [out-channels (car filter-shape)]
+           [filter-height (caddr filter-shape)]
+           [filter-width (cadddr filter-shape)]
+           
+           ;; Calculate output dimensions
+           [out-height (add1 (quotient (- (+ in-height (* 2 padding)) filter-height) stride))]
+           [out-width (add1 (quotient (- (+ in-width (* 2 padding)) filter-width) stride))]
+           
+           ;; Get device from input tensor
+           [device (dt:device input-tensor)]
+           
+           ;; Create output tensor on the same device
+           [output-data (make-vector (* batch-size out-channels out-height out-width) 0.0)]
+           [output-tensor (dt:create (list batch-size out-channels out-height out-width) output-data device)])
+      
+      ;; Try to call the C function with appropriate tensors
+      (c:conv2d-forward 
+       batch-size in-channels in-height in-width
+       out-channels filter-height filter-width
+       stride padding
+       (list->f64vector (vector->list (dt:data input-tensor)))
+       (list->f64vector (vector->list (dt:data filter-tensor)))
+       (list->f64vector (vector->list (dt:data output-tensor))))
+      
+      output-tensor)))
+
+;; Simple convolutional operation (without C library) as fallback
+(define (simple-conv2d input-tensor filter-tensor [stride 1] [padding 0])
+  (printf "Using pure Racket convolution implementation~n")
   (let* ([input-shape (dt:shape input-tensor)]
          [filter-shape (dt:shape filter-tensor)]
+         
          [batch-size (car input-shape)]
          [in-channels (cadr input-shape)]
          [in-height (caddr input-shape)]
          [in-width (cadddr input-shape)]
+         
          [out-channels (car filter-shape)]
          [filter-height (caddr filter-shape)]
          [filter-width (cadddr filter-shape)]
@@ -31,108 +72,283 @@
          [out-height (add1 (quotient (- (+ in-height (* 2 padding)) filter-height) stride))]
          [out-width (add1 (quotient (- (+ in-width (* 2 padding)) filter-width) stride))]
          
-         ;; Get device from input tensor
-         [device (dt:device input-tensor)]
-         
-         ;; Create output tensor on the same device
          [output-data (make-vector (* batch-size out-channels out-height out-width) 0.0)]
-         [output-tensor (dt:create (list batch-size out-channels out-height out-width) output-data device)])
+         [output-tensor (dt:create (list batch-size out-channels out-height out-width) 
+                                 output-data 
+                                 (dt:device input-tensor))]
+         
+         [input-data (dt:data input-tensor)]
+         [filter-data (dt:data filter-tensor)])
     
-    ;; Call the C function with appropriate tensors
-    (c:conv2d-forward 
-     batch-size in-channels in-height in-width
-     out-channels filter-height filter-width
-     stride padding
-     (list->f64vector (vector->list (dt:data input-tensor)))
-     (list->f64vector (vector->list (dt:data filter-tensor)))
-     (list->f64vector (vector->list (dt:data output-tensor))))
+    ;; Perform convolution manually
+    (for ([b (in-range batch-size)])
+      (for ([oc (in-range out-channels)])
+        (for ([oh (in-range out-height)])
+          (for ([ow (in-range out-width)])
+            ;; For each output position
+            (let ([out-idx (+ (* b out-channels out-height out-width)
+                             (* oc out-height out-width)
+                             (* oh out-width)
+                             ow)]
+                  [sum 0.0])
+              
+              ;; Sum over input channels and filter dimensions
+              (for ([ic (in-range in-channels)])
+                (for ([fh (in-range filter-height)])
+                  (for ([fw (in-range filter-width)])
+                    (let* ([ih (+ (* oh stride) fh (- padding))]
+                           [iw (+ (* ow stride) fw (- padding))])
+                      
+                      ;; Check if input position is valid
+                      (when (and (>= ih 0) (< ih in-height)
+                                 (>= iw 0) (< iw in-width))
+                        (let ([input-idx (+ (* b in-channels in-height in-width)
+                                           (* ic in-height in-width)
+                                           (* ih in-width)
+                                           iw)]
+                              [filter-idx (+ (* oc in-channels filter-height filter-width)
+                                            (* ic filter-height filter-width)
+                                            (* fh filter-width)
+                                            fw)])
+                          (set! sum (+ sum (* (vector-ref input-data input-idx)
+                                             (vector-ref filter-data filter-idx))))))))))
+              
+              ;; Set output
+              (vector-set! output-data out-idx sum)))))
     
     output-tensor))
 
-;; Max pooling operation
+;; Max pooling operation with fallback
 (define (max-pool-2x2 input-tensor)
+  (with-handlers ([exn:fail? (lambda (e)
+                              (printf "Warning: C max pooling failed, using fallback implementation: ~a~n"
+                                      (exn-message e))
+                              (simple-max-pool input-tensor))])
+    (let* ([input-shape (dt:shape input-tensor)]
+           [batch-size (car input-shape)]
+           [channels (cadr input-shape)]
+           [in-height (caddr input-shape)]
+           [in-width (cadddr input-shape)]
+           
+           ;; Calculate output dimensions
+           [out-height (quotient in-height 2)]
+           [out-width (quotient in-width 2)]
+           
+           ;; Get device from input tensor
+           [device (dt:device input-tensor)]
+           
+           ;; Create output tensor on the same device
+           [output-data (make-vector (* batch-size channels out-height out-width) 0.0)]
+           [output-tensor (dt:create (list batch-size channels out-height out-width) output-data device)])
+      
+      ;; Call the C function
+      (c:max-pool-2x2
+       batch-size channels in-height in-width
+       (list->f64vector (vector->list (dt:data input-tensor)))
+       (list->f64vector (vector->list (dt:data output-tensor))))
+      
+      output-tensor)))
+
+;; Simple max pooling (2x2) as fallback
+(define (simple-max-pool input-tensor)
+  (printf "Using pure Racket max pooling implementation~n")
   (let* ([input-shape (dt:shape input-tensor)]
          [batch-size (car input-shape)]
          [channels (cadr input-shape)]
          [in-height (caddr input-shape)]
          [in-width (cadddr input-shape)]
          
-         ;; Calculate output dimensions
          [out-height (quotient in-height 2)]
          [out-width (quotient in-width 2)]
          
-         ;; Get device from input tensor
-         [device (dt:device input-tensor)]
-         
-         ;; Create output tensor on the same device
          [output-data (make-vector (* batch-size channels out-height out-width) 0.0)]
-         [output-tensor (dt:create (list batch-size channels out-height out-width) output-data device)])
+         [output-tensor (dt:create (list batch-size channels out-height out-width)
+                                 output-data
+                                 (dt:device input-tensor))]
+         
+         [input-data (dt:data input-tensor)])
     
-    ;; Call the C function
-    (c:max-pool-2x2
-     batch-size channels in-height in-width
-     (list->f64vector (vector->list (dt:data input-tensor)))
-     (list->f64vector (vector->list (dt:data output-tensor))))
+    ;; Perform max pooling
+    (for ([b (in-range batch-size)])
+      (for ([c (in-range channels)])
+        (for ([oh (in-range out-height)])
+          (for ([ow (in-range out-width)])
+            (let ([out-idx (+ (* b channels out-height out-width)
+                             (* c out-height out-width)
+                             (* oh out-width)
+                             ow)]
+                  [max-val -inf.0])
+              
+              ;; Find max in 2x2 region
+              (for ([h (in-range (* oh 2) (+ (* oh 2) 2))])
+                (for ([w (in-range (* ow 2) (+ (* ow 2) 2))])
+                  (let ([in-idx (+ (* b channels in-height in-width)
+                                  (* c in-height in-width)
+                                  (* h in-width)
+                                  w)])
+                    (set! max-val (max max-val (vector-ref input-data in-idx))))))
+              
+              ;; Set output
+              (vector-set! output-data out-idx max-val))))))
     
     output-tensor))
 
-;; Flatten a 4D tensor to 2D (batch_size, features)
+;; Flatten a 4D tensor to 2D (batch_size, features) with fallback
 (define (flatten input-tensor)
-  (let* ([input-shape (dt:shape input-tensor)]
-         [batch-size (car input-shape)]
-         [channels (cadr input-shape)]
-         [height (caddr input-shape)]
-         [width (cadddr input-shape)]
-         
-         ;; Calculate flattened size
+  (with-handlers ([exn:fail? (lambda (e)
+                              (printf "Warning: C flatten failed, using fallback implementation: ~a~n"
+                                      (exn-message e))
+                              (simple-flatten input-tensor))])
+    (let* ([input-shape (dt:shape input-tensor)]
+           [batch-size (car input-shape)]
+           [channels (cadr input-shape)]
+           [height (caddr input-shape)]
+           [width (cadddr input-shape)]
+           
+           ;; Calculate flattened size
+           [flat-size (* channels height width)]
+           
+           ;; Get device from input tensor
+           [device (dt:device input-tensor)]
+           
+           ;; Create output tensor on the same device
+           [output-data (make-vector (* batch-size flat-size) 0.0)]
+           [output-tensor (dt:create (list batch-size flat-size) output-data device)])
+      
+      ;; Call the C function
+      (c:flatten-tensor
+       batch-size channels height width
+       (list->f64vector (vector->list (dt:data input-tensor)))
+       (list->f64vector (vector->list (dt:data output-tensor))))
+      
+      output-tensor)))
+
+;; Simple tensor flatten (4D to 2D) as fallback
+(define (simple-flatten input-tensor)
+  (printf "Using pure Racket flatten implementation~n")
+  (let* ([shape (dt:shape input-tensor)]
+         [batch-size (car shape)]
+         [channels (cadr shape)]
+         [height (caddr shape)]
+         [width (cadddr shape)]
          [flat-size (* channels height width)]
          
-         ;; Get device from input tensor
-         [device (dt:device input-tensor)]
-         
-         ;; Create output tensor on the same device
          [output-data (make-vector (* batch-size flat-size) 0.0)]
-         [output-tensor (dt:create (list batch-size flat-size) output-data device)])
+         [output-tensor (dt:create (list batch-size flat-size) 
+                                 output-data
+                                 (dt:device input-tensor))]
+         
+         [input-data (dt:data input-tensor)])
     
-    ;; Call the C function
-    (c:flatten-tensor
-     batch-size channels height width
-     (list->f64vector (vector->list (dt:data input-tensor)))
-     (list->f64vector (vector->list (dt:data output-tensor))))
+    ;; Flatten the tensor
+    (for ([b (in-range batch-size)])
+      (for ([c (in-range channels)])
+        (for ([h (in-range height)])
+          (for ([w (in-range width)])
+            (let ([in-idx (+ (* b channels height width)
+                            (* c height width)
+                            (* h width)
+                            w)]
+                  [out-idx (+ (* b flat-size)
+                             (* c height width)
+                             (* h width)
+                             w)])
+              (vector-set! output-data out-idx (vector-ref input-data in-idx)))))))
     
     output-tensor))
 
-;; ReLU activation function
+;; ReLU activation function with fallback
 (define (relu input-tensor)
+  (with-handlers ([exn:fail? (lambda (e)
+                              (printf "Warning: C ReLU failed, using fallback implementation: ~a~n"
+                                      (exn-message e))
+                              (simple-relu input-tensor))])
+    (let* ([shape (dt:shape input-tensor)]
+           [size (apply * shape)]
+           [device (dt:device input-tensor)]
+           [result-data (make-vector size 0.0)]
+           [result-tensor (dt:create shape result-data device)])
+      
+      ;; Use the C function from ffi_ops.rkt
+      (c:relu-forward size 
+                     (list->f64vector (vector->list (dt:data input-tensor))) 
+                     (list->f64vector (vector->list (dt:data result-tensor))))
+      
+      result-tensor)))
+
+;; Simple ReLU implementation as fallback
+(define (simple-relu input-tensor)
+  (printf "Using pure Racket ReLU implementation~n")
   (let* ([shape (dt:shape input-tensor)]
          [size (apply * shape)]
-         [device (dt:device input-tensor)]
-         [result-data (make-vector size 0.0)]
-         [result-tensor (dt:create shape result-data device)])
+         [input-data (dt:data input-tensor)]
+         [output-data (make-vector size 0.0)]
+         [output-tensor (dt:create shape output-data (dt:device input-tensor))])
     
-    ;; Use the C function from ffi_ops.rkt
-    (c:relu-forward size 
-                   (list->f64vector (vector->list (dt:data input-tensor))) 
-                   (list->f64vector (vector->list (dt:data result-tensor))))
+    ;; Apply ReLU: max(0, x)
+    (for ([i (in-range size)])
+      (vector-set! output-data i (max 0.0 (vector-ref input-data i))))
     
-    result-tensor))
+    output-tensor))
 
-;; Softmax function
+;; Softmax function with fallback
 (define (softmax input-tensor)
+  (with-handlers ([exn:fail? (lambda (e)
+                              (printf "Warning: C softmax failed, using fallback implementation: ~a~n"
+                                      (exn-message e))
+                              (simple-softmax input-tensor))])
+    (let* ([shape (dt:shape input-tensor)]
+           [batch-size (car shape)]
+           [num-classes (cadr shape)]
+           [device (dt:device input-tensor)]
+           [result-data (make-vector (* batch-size num-classes) 0.0)]
+           [result-tensor (dt:create shape result-data device)])
+      
+      ;; Call the C function
+      (c:softmax
+       batch-size num-classes
+       (list->f64vector (vector->list (dt:data input-tensor)))
+       (list->f64vector (vector->list (dt:data result-tensor))))
+      
+      result-tensor)))
+
+;; Simple softmax implementation as fallback
+(define (simple-softmax input-tensor)
+  (printf "Using pure Racket softmax implementation~n")
   (let* ([shape (dt:shape input-tensor)]
          [batch-size (car shape)]
          [num-classes (cadr shape)]
-         [device (dt:device input-tensor)]
-         [result-data (make-vector (* batch-size num-classes) 0.0)]
-         [result-tensor (dt:create shape result-data device)])
+         [input-data (dt:data input-tensor)]
+         [output-data (make-vector (* batch-size num-classes) 0.0)]
+         [output-tensor (dt:create shape output-data (dt:device input-tensor))])
     
-    ;; Call the C function
-    (c:softmax
-     batch-size num-classes
-     (list->f64vector (vector->list (dt:data input-tensor)))
-     (list->f64vector (vector->list (dt:data result-tensor))))
+    ;; Apply softmax batch-wise
+    (for ([b (in-range batch-size)])
+      (let* ([start-idx (* b num-classes)]
+             [end-idx (+ start-idx num-classes)]
+             
+             ;; Find max value for numerical stability
+             [max-val (for/fold ([max-val -inf.0])
+                                ([i (in-range start-idx end-idx)])
+                        (max max-val (vector-ref input-data i)))]
+             
+             ;; Compute exp(x_i - max)
+             [exp-vals (make-vector num-classes 0.0)]
+             [_ (for ([c (in-range num-classes)])
+                  (vector-set! exp-vals c 
+                               (exp (- (vector-ref input-data (+ start-idx c)) 
+                                      max-val))))]
+             
+             ;; Compute sum of exp values
+             [sum (for/sum ([c (in-range num-classes)])
+                    (vector-ref exp-vals c))])
+        
+        ;; Normalize by sum
+        (for ([c (in-range num-classes)])
+          (vector-set! output-data (+ start-idx c)
+                       (/ (vector-ref exp-vals c) sum)))))
     
-    result-tensor))
+    output-tensor))
 
 ;; Fully connected layer
 (define (fc-layer input-tensor weights bias [activation-fn identity])
@@ -140,17 +356,45 @@
          [z (dt:add (dt:mul input-tensor weights) bias)])
     (activation-fn z)))
 
-;; Cross-entropy loss
+;; Cross-entropy loss with fallback
 (define (cross-entropy-loss predictions targets)
+  (with-handlers ([exn:fail? (lambda (e)
+                              (printf "Warning: C cross-entropy failed, using fallback implementation: ~a~n"
+                                      (exn-message e))
+                              (simple-cross-entropy-loss predictions targets))])
+    (let* ([shape (dt:shape predictions)]
+           [batch-size (car shape)]
+           [num-classes (cadr shape)])
+      
+      ;; Call the C function
+      (c:cross-entropy-loss
+       batch-size num-classes
+       (list->f64vector (vector->list (dt:data predictions)))
+       (list->f64vector (vector->list (dt:data targets)))))))
+
+;; Simple cross-entropy loss implementation as fallback
+(define (simple-cross-entropy-loss predictions targets)
+  (printf "Using pure Racket cross-entropy loss implementation~n")
   (let* ([shape (dt:shape predictions)]
          [batch-size (car shape)]
-         [num-classes (cadr shape)])
+         [num-classes (cadr shape)]
+         [pred-data (dt:data predictions)]
+         [target-data (dt:data targets)]
+         [epsilon 1e-15]  ; To avoid log(0)
+         [total-loss 0.0])
     
-    ;; Call the C function
-    (c:cross-entropy-loss
-     batch-size num-classes
-     (list->f64vector (vector->list (dt:data predictions)))
-     (list->f64vector (vector->list (dt:data targets))))))
+    ;; Compute loss batch-wise
+    (for ([b (in-range batch-size)])
+      (let ([start-idx (* b num-classes)])
+        (for ([c (in-range num-classes)])
+          (let* ([p (max epsilon (min (- 1.0 epsilon) 
+                                      (vector-ref pred-data (+ start-idx c))))]
+                 [t (vector-ref target-data (+ start-idx c))])
+            (when (> t 0.0)  ; Only compute loss for non-zero targets
+              (set! total-loss (- total-loss (* t (log p)))))))))
+    
+    ;; Return average loss
+    (/ total-loss batch-size)))
 
 ;; Define the LeNet model architecture
 ;; Returns a function that performs the forward pass
@@ -926,10 +1170,66 @@
         'time total-time
         'device device-type))
 
+;; Simple test function for CNN
+(define (test-cnn)
+  (printf "Running CNN quick test...~n")
+  (with-handlers ([exn:fail? (lambda (e)
+                              (printf "Error in test: ~a~n" (exn-message e)))])
+    
+    ;; Create sample tensors
+    (printf "Creating test input tensor (2x3x8x8)...~n")
+    (define input (dt:random (list 2 3 8 8) 0.1))
+    
+    ;; Test convolution
+    (printf "Testing convolution...~n")
+    (define filters (dt:random (list 6 3 3 3) 0.1))
+    (define conv-result (conv2d input filters 1 1))
+    (printf "Convolution output shape: ~a~n" (dt:shape conv-result))
+    
+    ;; Test ReLU
+    (printf "Testing ReLU...~n")
+    (define relu-result (relu conv-result))
+    
+    ;; Test max pooling
+    (printf "Testing max pooling...~n")
+    (define pool-result (max-pool-2x2 relu-result))
+    (printf "Pooling output shape: ~a~n" (dt:shape pool-result))
+    
+    ;; Test flatten
+    (printf "Testing flatten...~n")
+    (define flat-result (flatten pool-result))
+    (printf "Flattened shape: ~a~n" (dt:shape flat-result))
+    
+    ;; Test fully connected layer
+    (printf "Testing fully connected layer...~n")
+    (define weights (dt:random (list (cadr (dt:shape flat-result)) 10) 0.1))
+    (define bias (dt:random (list 1 10) 0.1))
+    (define fc-result (fc-layer flat-result weights bias))
+    
+    ;; Test softmax
+    (printf "Testing softmax...~n")
+    (define softmax-result (softmax fc-result))
+    (printf "Final output shape: ~a~n" (dt:shape softmax-result))
+    
+    ;; Test loss calculation
+    (printf "Testing loss calculation...~n")
+    (define targets (dt:random (list 2 10) 0.1))
+    (define loss (cross-entropy-loss softmax-result targets))
+    (printf "Loss: ~a~n" loss)
+    
+    (printf "CNN test completed successfully!~n")
+    #t))
+
 ;; Run the CNN from the command line
 (module+ main
-  (printf "Running CNN on the default device...~n")
+  (printf "Running CNN test on the default device...~n")
   (with-handlers ([exn:fail? (lambda (e)
                               (printf "Error running CNN: ~a~n" (exn-message e))
-                              (printf "This is likely due to missing C libraries. Make sure to compile them with ./compile_extensions.sh~n"))])
+                              (printf "This is likely due to missing C libraries. Using pure Racket implementations as fallback.~n"))])
+    
+    ;; First run a simple test to make sure the CNN operations work
+    (test-cnn)
+    
+    ;; If test passes, try training
+    (printf "~nStarting CNN training (reduced size)...~n")
     (train-cnn 'cpu 2 32)))

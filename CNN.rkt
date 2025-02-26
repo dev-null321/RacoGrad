@@ -404,13 +404,13 @@
                     [f3w #f] [f3b #f])
   (printf "Creating LeNet model on device: ~a~n" (get-device-type dev))
   ;; Create model parameters on the specified device or use provided ones
-  (let ([conv1-filters (if c1f c1f (dt:random (list 6 3 5 5) 0.1 dev))]       ; 6 filters, 3 channels, 5x5
+  (let ([conv1-filters (if c1f c1f (dt:random (list 6 1 5 5) 0.1 dev))]       ; 6 filters, 1 channel, 5x5
         [conv1-bias (if c1b c1b (dt:random (list 1 6) 0.1 dev))]              ; 6 channels
         
         [conv2-filters (if c2f c2f (dt:random (list 16 6 5 5) 0.1 dev))]      ; 16 filters, 6 channels, 5x5
         [conv2-bias (if c2b c2b (dt:random (list 1 16) 0.1 dev))]             ; 16 channels
         
-        [fc1-weights (if f1w f1w (dt:random (list 400 120) 0.1 dev))]         ; 400 inputs, 120 outputs
+        [fc1-weights (if f1w f1w (dt:random (list 256 120) 0.1 dev))]         ; 256 inputs (4x4x16), 120 outputs
         [fc1-bias (if f1b f1b (dt:random (list 1 120) 0.1 dev))]
         
         [fc2-weights (if f2w f2w (dt:random (list 120 84) 0.1 dev))]          ; 120 inputs, 84 outputs
@@ -582,11 +582,9 @@
                                 (values max-idx max-val)))))])
     predictions))
 
-;; Function to load CIFAR-10 data
-;; This implementation uses MNIST as a substitute since we already have that loaded
-;; With robust error handling to fallback to random data if MNIST is not available
-(define (load-cifar10)
-  (printf "Loading MNIST data as substitute for CIFAR-10...~n")
+;; Function to load MNIST data for CNN directly
+(define (load-mnist-data-for-cnn)
+  (printf "Loading MNIST data for CNN training...~n")
   
   (define (read-idx3-ubyte filename)
     (with-handlers ([exn:fail? (lambda (e)
@@ -636,10 +634,10 @@
                [test-size 20]
                [dev (current-device)]
                
-               ;; Generate random data
-               [train-images (dt:random (list train-size 3 28 28) 1.0 dev)]
+               ;; Generate random data - single channel for simplicity
+               [train-images (dt:random (list train-size 1 28 28) 1.0 dev)]
                [train-labels-data (make-vector (* train-size 10) 0.0)]
-               [test-images (dt:random (list test-size 3 28 28) 1.0 dev)]
+               [test-images (dt:random (list test-size 1 28 28) 1.0 dev)]
                [test-labels-data (make-vector (* test-size 10) 0.0)])
           
           ;; Generate one-hot labels (1 in a random position for each example)
@@ -671,10 +669,7 @@
       
       ;; Look for the data files in each potential location
       (for ([path base-paths] #:when (not found-path))
-        (when (and (file-exists? (string-append path "train-images.idx3-ubyte"))
-                   (file-exists? (string-append path "train-labels.idx1-ubyte"))
-                   (file-exists? (string-append path "t10k-images.idx3-ubyte"))
-                   (file-exists? (string-append path "t10k-labels.idx1-ubyte")))
+        (when (file-exists? (string-append path "train-images.idx3-ubyte"))
           (set! found-path path)))
       
       (if found-path
@@ -684,79 +679,113 @@
                  [test-labels-file (string-append found-path "t10k-labels.idx1-ubyte")]
                  
                  ;; Load and format train data
-                 [train-images-data (read-idx3-ubyte train-images-file)]
-                 [train-labels-data (read-idx1-ubyte train-labels-file)])
+                 [train-images-data (or (read-idx3-ubyte train-images-file)
+                                       (begin 
+                                         (printf "Failed to read training images, using random data~n")
+                                         (make-vector (* 100 784) 0.5)))]
+                 [train-labels-data (or (read-idx1-ubyte train-labels-file)
+                                       (begin
+                                         (printf "Failed to read training labels, using random data~n")
+                                         (for/vector ([i (in-range 100)]) (random 10))))]
+                 
+                 ;; Load and format test data
+                 [test-images-data (or (read-idx3-ubyte test-images-file)
+                                      (begin 
+                                        (printf "Failed to read test images, using random data~n")
+                                        (make-vector (* 20 784) 0.5)))]
+                 [test-labels-data (or (read-idx1-ubyte test-labels-file)
+                                      (begin
+                                        (printf "Failed to read test labels, using random data~n")
+                                        (for/vector ([i (in-range 20)]) (random 10))))]
+                 
+                 ;; Create one-hot encoded labels
+                 [train-labels-onehot (one-hot train-labels-data 10)]
+                 [test-labels-onehot (one-hot test-labels-data 10)]
+                 
+                 ;; Create device tensors
+                 [dev (current-device)]
+                 [train-size (min 1000 (/ (vector-length train-images-data) 784))]
+                 [test-size (min 500 (/ (vector-length test-images-data) 784))]
+                 
+                 ;; For CNN, reshape to 4D: [batch_size, channels, height, width]
+                 ;; Single channel for grayscale
+                 [train-tensor (dt:create (list train-size 1 28 28) 
+                                         (make-vector (* train-size 1 28 28) 0.0) 
+                                         dev)]
+                 [test-tensor (dt:create (list test-size 1 28 28) 
+                                        (make-vector (* test-size 1 28 28) 0.0) 
+                                        dev)])
             
-            ;; If we couldn't read the data, fall back to random
-            (when (or (not train-images-data) (not train-labels-data))
-              (error 'load-cifar10 "Failed to read MNIST training data"))
+            ;; Copy data to tensor
+            (for ([i (in-range train-size)])
+              (for ([h (in-range 28)])
+                (for ([w (in-range 28)])
+                  (let ([src-idx (+ (* i 784) (* h 28) w)]
+                        [dst-idx (+ (* i 1 28 28) (* h 28) w)])
+                    (vector-set! (dt:data train-tensor) dst-idx 
+                                (vector-ref train-images-data src-idx))))))
             
-            (let* ([test-images-data (read-idx3-ubyte test-images-file)]
-                   [test-labels-data (read-idx1-ubyte test-labels-file)])
-              
-              ;; If we couldn't read the test data, fall back to random
-              (when (or (not test-images-data) (not test-labels-data))
-                (error 'load-cifar10 "Failed to read MNIST test data"))
-              
-              (let* ([train-labels-onehot (one-hot train-labels-data 10)]
-                     [test-labels-onehot (one-hot test-labels-data 10)]
-                     
-                     ;; Create device tensors
-                     [dev (current-device)]
-                     [train-size 1000]   ; Using smaller subset for testing
-                     [test-size 500]     ; Using smaller subset for testing
-                     
-                     ;; For CNN, reshape to 4D: [batch_size, channels, height, width]
-                     ;; MNIST is grayscale so we duplicate to 3 channels for CNN
-                     [train-images-reshaped (make-vector (* train-size 3 28 28) 0.0)]
-                     [test-images-reshaped (make-vector (* test-size 3 28 28) 0.0)])
-                
-                ;; Copy the same grayscale data to each channel
-                (for ([i (in-range train-size)])
-                  (let ([img-offset (* i 784)])
-                    (for ([pixel (in-range 784)])
-                      (let ([pixel-value (vector-ref train-images-data (+ img-offset pixel))])
-                        (for ([c (in-range 3)])
-                          (vector-set! train-images-reshaped 
-                                     (+ (* i 3 28 28) (* c 28 28) pixel) 
-                                     pixel-value))))))
-                
-                (for ([i (in-range test-size)])
-                  (let ([img-offset (* i 784)])
-                    (for ([pixel (in-range 784)])
-                      (let ([pixel-value (vector-ref test-images-data (+ img-offset pixel))])
-                        (for ([c (in-range 3)])
-                          (vector-set! test-images-reshaped 
-                                     (+ (* i 3 28 28) (* c 28 28) pixel) 
-                                     pixel-value))))))
-                
-                ;; Create tensors with device support
-                (let ([train-images (dt:create (list train-size 3 28 28) train-images-reshaped dev)]
-                      [train-labels (dt:create (list train-size 10) 
-                                              (make-vector (* train-size 10) 0.0) dev)]
-                      [test-images (dt:create (list test-size 3 28 28) test-images-reshaped dev)]
-                      [test-labels (dt:create (list test-size 10) 
-                                            (make-vector (* test-size 10) 0.0) dev)])
-                  
-                  ;; Extract label data for our smaller subset
-                  (for ([i (in-range train-size)])
-                    (for ([j (in-range 10)])
-                      (vector-set! (dt:data train-labels)
-                                  (+ (* i 10) j)
-                                  (vector-ref train-labels-onehot (+ (* i 10) j)))))
-                  
-                  (for ([i (in-range test-size)])
-                    (for ([j (in-range 10)])
-                      (vector-set! (dt:data test-labels)
-                                  (+ (* i 10) j)
-                                  (vector-ref test-labels-onehot (+ (* i 10) j)))))
-                  
-                  (printf "Loaded MNIST: ~a training images, ~a test images~n" 
-                          train-size test-size)
-                  (values train-images train-labels test-images test-labels)))))
+            (for ([i (in-range test-size)])
+              (for ([h (in-range 28)])
+                (for ([w (in-range 28)])
+                  (let ([src-idx (+ (* i 784) (* h 28) w)]
+                        [dst-idx (+ (* i 1 28 28) (* h 28) w)])
+                    (vector-set! (dt:data test-tensor) dst-idx 
+                                (vector-ref test-images-data src-idx))))))
+            
+            ;; Create label tensors
+            (define train-labels (dt:create (list train-size 10) 
+                                           (make-vector (* train-size 10) 0.0)
+                                           dev))
+            (define test-labels (dt:create (list test-size 10) 
+                                          (make-vector (* test-size 10) 0.0)
+                                          dev))
+            
+            ;; Copy labels
+            (for ([i (in-range train-size)])
+              (for ([j (in-range 10)])
+                (let ([idx (+ (* i 10) j)])
+                  (vector-set! (dt:data train-labels) idx
+                              (vector-ref train-labels-onehot idx)))))
+            
+            (for ([i (in-range test-size)])
+              (for ([j (in-range 10)])
+                (let ([idx (+ (* i 10) j)])
+                  (vector-set! (dt:data test-labels) idx
+                              (vector-ref test-labels-onehot idx)))))
+            
+            (printf "Loaded MNIST: ~a training images, ~a test images~n" 
+                    train-size test-size)
+            (values train-tensor train-labels test-tensor test-labels))
           
           ;; No MNIST data found in any location
-          (error 'load-cifar10 "Could not find MNIST data files in any standard location")))))
+          (let* ([train-size 100]
+                 [test-size 20]
+                 [dev (current-device)]
+                 
+                 ;; Generate random data
+                 [train-images (dt:random (list train-size 1 28 28) 1.0 dev)]
+                 [train-labels-data (make-vector (* train-size 10) 0.0)]
+                 [test-images (dt:random (list test-size 1 28 28) 1.0 dev)]
+                 [test-labels-data (make-vector (* test-size 10) 0.0)])
+            
+            ;; Generate one-hot labels (1 in a random position for each example)
+            (for ([i (in-range train-size)])
+              (vector-set! train-labels-data 
+                           (+ (* i 10) (random 10)) 
+                           1.0))
+            
+            (for ([i (in-range test-size)])
+              (vector-set! test-labels-data 
+                           (+ (* i 10) (random 10)) 
+                           1.0))
+            
+            (let ([train-labels (dt:create (list train-size 10) train-labels-data dev)]
+                  [test-labels (dt:create (list test-size 10) test-labels-data dev)])
+              
+              (printf "Created random MNIST data: ~a training images, ~a test images~n" 
+                      train-size test-size)
+              (values train-images train-labels test-images test-labels)))))))
 
 ;; Get a batch of data using efficient tensor slicing
 (define (get-batch images labels batch-size start-idx)
@@ -968,7 +997,7 @@
   
   ;; Load data
   (define-values (train-images train-labels test-images test-labels)
-    (load-cifar10))
+    (load-mnist-data-for-cnn))
   
   ;; Move data to the selected device
   (set! train-images (dt:to train-images (current-device)))
@@ -1172,18 +1201,20 @@
 
 ;; Simple test function for CNN
 (define (test-cnn)
-  (printf "Running CNN quick test...~n")
+  (printf "Running CNN quick test for MNIST...~n")
   (with-handlers ([exn:fail? (lambda (e)
-                              (printf "Error in test: ~a~n" (exn-message e)))])
+                              (printf "Error in test: ~a~n" (exn-message e))
+                              (printf "Stacktrace: ~a~n" (exn->string e))
+                              #f)])
     
-    ;; Create sample tensors
-    (printf "Creating test input tensor (2x3x8x8)...~n")
-    (define input (dt:random (list 2 3 8 8) 0.1))
+    ;; Create sample tensors similar to MNIST format
+    (printf "Creating test input tensor (2x1x28x28)...~n")
+    (define input (dt:random (list 2 1 28 28) 0.1))
     
     ;; Test convolution
     (printf "Testing convolution...~n")
-    (define filters (dt:random (list 6 3 3 3) 0.1))
-    (define conv-result (conv2d input filters 1 1))
+    (define filters (dt:random (list 6 1 5 5) 0.1))
+    (define conv-result (conv2d input filters 1 2))
     (printf "Convolution output shape: ~a~n" (dt:shape conv-result))
     
     ;; Test ReLU
@@ -1195,9 +1226,24 @@
     (define pool-result (max-pool-2x2 relu-result))
     (printf "Pooling output shape: ~a~n" (dt:shape pool-result))
     
+    ;; Second conv layer
+    (printf "Testing second conv layer...~n")
+    (define filters2 (dt:random (list 16 6 5 5) 0.1))
+    (define conv-result2 (conv2d pool-result filters2 1 0))
+    (printf "Conv2 output shape: ~a~n" (dt:shape conv-result2))
+    
+    ;; Second ReLU
+    (printf "Testing second ReLU...~n")
+    (define relu-result2 (relu conv-result2))
+    
+    ;; Second max pooling
+    (printf "Testing second max pooling...~n")
+    (define pool-result2 (max-pool-2x2 relu-result2))
+    (printf "Pool2 output shape: ~a~n" (dt:shape pool-result2))
+    
     ;; Test flatten
     (printf "Testing flatten...~n")
-    (define flat-result (flatten pool-result))
+    (define flat-result (flatten pool-result2))
     (printf "Flattened shape: ~a~n" (dt:shape flat-result))
     
     ;; Test fully connected layer
@@ -1225,11 +1271,21 @@
   (printf "Running CNN test on the default device...~n")
   (with-handlers ([exn:fail? (lambda (e)
                               (printf "Error running CNN: ~a~n" (exn-message e))
-                              (printf "This is likely due to missing C libraries. Using pure Racket implementations as fallback.~n"))])
+                              (printf "This is likely due to missing C libraries. Using pure Racket implementations as fallback.~n")
+                              #f)])
     
     ;; First run a simple test to make sure the CNN operations work
-    (test-cnn)
+    (define test-success (test-cnn))
     
-    ;; If test passes, try training
-    (printf "~nStarting CNN training (reduced size)...~n")
-    (train-cnn 'cpu 2 32)))
+    (if test-success
+        (begin
+          (printf "~nCNN component test passed successfully!~n")
+          
+          ;; Ask if we want to run the full training
+          (printf "Do you want to run the full MNIST training? (Takes longer) (y/N): ")
+          (let ([response (read-line)])
+            (when (or (equal? response "y") (equal? response "Y"))
+              (printf "~nStarting CNN training on MNIST...~n")
+              (train-cnn 'cpu 1 32))))  ;; Just 1 epoch for quick test
+        
+        (printf "~nCNN test failed. Please fix the issues before proceeding.~n"))))

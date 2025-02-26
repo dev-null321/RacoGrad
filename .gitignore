@@ -1,0 +1,22 @@
+# Racket compiled files
+compiled/
+*.zo
+*.dep
+*.rkt~
+
+# Binary files
+*.dylib
+*.so
+*.dll
+
+# OS specific files
+.DS_Store
+
+# MNIST data files (large binaries)
+mnist-data/t10k-images.idx3-ubyte
+mnist-data/t10k-labels.idx1-ubyte
+mnist-data/train-images.idx3-ubyte
+mnist-data/train-labels.idx1-ubyte
+
+# IDE/Editor files
+*~

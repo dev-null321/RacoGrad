@@ -26,14 +26,12 @@ RacoGrad is a deep learning framework implemented in Racket, a dialect of the Li
    ```
    
    Download the following files and place them in the mnist-data directory:
-   - [train-images.idx3-ubyte](http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz)
-   - [train-labels.idx1-ubyte](http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz)
-   - [t10k-images.idx3-ubyte](http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz)
-   - [t10k-labels.idx1-ubyte](http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz)
+
+   Note I used Kaggle do download the dataset. Download it and place it in your directory. 
    
    Note: Remember to gunzip these files after downloading.
 
-3. Compile the C extensions:
+4. Compile the C extensions:
    ```bash
    ./compile_extensions.sh
    ```

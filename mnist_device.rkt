@@ -29,7 +29,7 @@
 
 ;; Load MNIST data
 (define (load-mnist-data type)
-  (let* ([base-path "/Users/marq/Documents/racograd/mnist-data/"]
+  (let* ([base-path "/path to mnist/"]
          [images-file (string-append base-path 
                                      (if (equal? type "train")
                                          "train-images.idx3-ubyte"

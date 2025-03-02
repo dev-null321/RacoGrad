@@ -661,8 +661,8 @@
     ;; Try to locate the MNIST data - first check in the proper location
     (let* ([base-paths 
             (list 
-             "/Users/marq/Documents/racograd_clean/mnist-data/"
-             "/Users/marq/Documents/racograd/mnist-data/"
+             "/path to mnist/"
+             "/path to mnist/"
              "./mnist-data/"
              "../mnist-data/")]
            [found-path #f])

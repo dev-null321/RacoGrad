@@ -9,7 +9,15 @@
          relu-derivative 
          initialize-fnn 
          sigmoid 
-         sigmoid-derivative)
+         sigmoid-derivative
+         leaky-relu
+         leaky-relu-derivative
+         elu
+         elu-derivative
+         softplus
+         softplus-derivative
+         swish
+         swish-derivative)
 
 ;; Activation functions
 (define (relu x)
@@ -40,6 +48,54 @@
   (let ([t (tanh x)])
     (t:create (t:shape x)
               (for/vector ([v (t:data t)]) (- 1 (* v v))))))
+
+;; Leaky ReLU: max(alpha*x, x) with default alpha=0.01
+(define (leaky-relu x [alpha 0.01])
+  (t:create (t:shape x)
+            (for/vector ([v (t:data x)])
+              (if (> v 0) v (* alpha v)))))
+
+(define (leaky-relu-derivative x [alpha 0.01])
+  (t:create (t:shape x)
+            (for/vector ([v (t:data x)])
+              (if (> v 0) 1 alpha))))
+
+;; ELU: x if x > 0, alpha*(exp(x)-1) otherwise
+(define (elu x [alpha 1.0])
+  (t:create (t:shape x)
+            (for/vector ([v (t:data x)])
+              (if (> v 0) v (* alpha (- (exp v) 1))))))
+
+(define (elu-derivative x [alpha 1.0])
+  (t:create (t:shape x)
+            (for/vector ([v (t:data x)])
+              (if (> v 0) 1 (* alpha (exp v))))))
+
+;; Softplus: log(1 + exp(x)) — smooth approximation of ReLU
+(define (softplus x)
+  (t:create (t:shape x)
+            (for/vector ([v (t:data x)])
+              ;; Numerically stable: for large v, softplus(v) ≈ v
+              (if (> v 20) v (log (+ 1 (exp v)))))))
+
+(define (softplus-derivative x)
+  ;; derivative of softplus is sigmoid
+  (sigmoid x))
+
+;; Swish: x * sigmoid(x) — self-gated activation
+(define (swish x)
+  (let ([sig (sigmoid x)])
+    (t:create (t:shape x)
+              (for/vector ([v (t:data x)]
+                           [s (t:data sig)])
+                (* v s)))))
+
+(define (swish-derivative x)
+  (let ([sig (sigmoid x)])
+    (t:create (t:shape x)
+              (for/vector ([v (t:data x)]
+                           [s (t:data sig)])
+                (+ s (* v s (- 1 s)))))))
 
 ;; Forward pass through a dense layer
 (define (dense-forward input weights biases activation-fn)

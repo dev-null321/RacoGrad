@@ -187,7 +187,7 @@
 (let ([a (t:create '(2 2) '(1 2 3 4))]
       [b (t:create '(2 2) '(5 6 7 8))])
   (check "elementwise mul"
-         (equal? (vector->list (t:data (t:mul a b))) '(5 12 21 32))))
+         (equal? (vector->list (t:data (t:emul a b))) '(5 12 21 32))))
 
 ;; ============================================================
 ;; 7. Dot Product
@@ -243,7 +243,7 @@
 
 (let ([t (t:create '(4) '(-2.0 -0.5 0.0 3.0))])
   (let ([r (relu t)])
-    (check "relu" (equal? (vector->list (t:data r)) '(0 0 0 3.0))))
+    (check "relu" (equal? (vector->list (t:data r)) '(0.0 0.0 0.0 3.0))))
   (let ([r (relu-derivative t)])
     (check "relu-derivative" (equal? (vector->list (t:data r)) '(0 0 0 1)))))
 

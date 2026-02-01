@@ -17,7 +17,8 @@
          ;; math operations
          t:add
          t:sub
-         t:mul ; Matrix multiplication and elementwise
+         t:mul  ; Matrix multiplication
+         t:emul ; Elementwise multiplication (Hadamard product)
          t:dot ; Dot Product
          t:scale ; Scalar Multiplication
          t:transpose
@@ -306,6 +307,19 @@
     (tensor (tensor-shape t)
             (for/vector ([v data])
               (* v scalar)))))
+
+;; Elementwise (Hadamard) multiplication
+(define (t:emul t1 t2)
+  (let ([shape1 (tensor-shape t1)]
+        [shape2 (tensor-shape t2)]
+        [data1 (tensor-data t1)]
+        [data2 (tensor-data t2)])
+    (unless (equal? shape1 shape2)
+      (error "t:emul: Tensors must have the same shape for elementwise multiplication"))
+    (tensor shape1
+            (for/vector ([a (in-vector data1)]
+                         [b (in-vector data2)])
+              (* a b)))))
 
 ;; Dot product (1D only)
 (define (t:dot t1 t2)

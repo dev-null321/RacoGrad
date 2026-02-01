@@ -1,7 +1,10 @@
 #lang racket
 
+;; Simple test for basic tensor operations and autograd
+;; This is a quick smoke test — see test-suite.rkt for comprehensive tests.
+
 (require "tensor.rkt")
-(require "grad.rkt")
+(require "autograd.rkt")
 
 (define (test-fnn)
   (let* ([input-dim 3]
@@ -15,50 +18,51 @@
 
     (define (create-data-tensor data)
       (let ([flattened-data (apply append data)])
-        (create-tensor (list (length data) (length (car data))) flattened-data)))
+        (t:create (list (length data) (length (car data))) flattened-data)))
 
     (let* ([input-tensor (create-data-tensor input-data)]
            [output-tensor (create-data-tensor output-data)]
-           [hidden-weights (random-tensor (list input-dim hidden-dim) 0.1)]
-           [hidden-biases (random-tensor (list hidden-dim) 0.1)]
-           [output-weights (random-tensor (list hidden-dim output-dim) 0.1)]
-           [output-biases (random-tensor (list output-dim) 0.1)])
+           [hidden-weights (t:random (list input-dim hidden-dim) 0.1)]
+           [hidden-biases (t:random (list hidden-dim) 0.1)]
+           [output-weights (t:random (list hidden-dim output-dim) 0.1)]
+           [output-biases (t:random (list output-dim) 0.1)])
 
       (displayln "Initial hidden weights:")
-      (print-tensor hidden-weights)
+      (t:print hidden-weights)
       (displayln "Initial hidden biases:")
-      (print-tensor hidden-biases)
+      (t:print hidden-biases)
       (displayln "Initial output weights:")
-      (print-tensor output-weights)
+      (t:print output-weights)
       (displayln "Initial output biases:")
-      (print-tensor output-biases)
+      (t:print output-biases)
       (newline)
 
       (for ([epoch (in-range num-epochs)])
-        (let* ([hidden-output (dense-forward input-tensor hidden-weights hidden-biases)]
-               [output (dense-forward hidden-output output-weights output-biases)]
+        (let* ([hidden-output (dense-forward input-tensor hidden-weights hidden-biases relu)]
+               [output (dense-forward hidden-output output-weights output-biases relu)]
                [loss (mean-squared-error output-tensor output)]
-               [output-grad (tensor-subtract output output-tensor)])
+               [output-grad (t:sub output output-tensor)])
           (displayln (string-append "Epoch: " (number->string epoch) ", Loss: " (number->string loss)))
 
           (let-values ([(output-grad-weights output-grad-biases output-grad-input)
-                        (dense-backward hidden-output output-weights output-biases output output-grad learning-rate)]
+                        (dense-backward hidden-output output-weights output-biases output output-grad relu-derivative learning-rate)]
                        [(hidden-grad-weights hidden-grad-biases _)
                         (dense-backward input-tensor hidden-weights hidden-biases hidden-output
-                                        (tensor-multiply output-grad (transpose output-weights))
-                                        learning-rate)])
-            (set! output-weights output-grad-weights)
-            (set! output-biases output-grad-biases)
-            (set! hidden-weights hidden-grad-weights)
-            (set! hidden-biases hidden-grad-biases))))
+                                        (t:mul output-grad (t:transpose output-weights))
+                                        relu-derivative learning-rate)])
+            ;; Update weights using gradient descent
+            (set! output-weights (t:sub output-weights (t:scale output-grad-weights learning-rate)))
+            (set! output-biases (t:sub output-biases (t:scale output-grad-biases learning-rate)))
+            (set! hidden-weights (t:sub hidden-weights (t:scale hidden-grad-weights learning-rate)))
+            (set! hidden-biases (t:sub hidden-biases (t:scale hidden-grad-biases learning-rate))))))
 
-      (displayln "Final hidden weights:")
-      (print-tensor hidden-weights)
+      (displayln "\nFinal hidden weights:")
+      (t:print hidden-weights)
       (displayln "Final hidden biases:")
-      (print-tensor hidden-biases)
+      (t:print hidden-biases)
       (displayln "Final output weights:")
-      (print-tensor output-weights)
+      (t:print output-weights)
       (displayln "Final output biases:")
-      (print-tensor output-biases))))
+      (t:print output-biases))))
 
 (test-fnn)

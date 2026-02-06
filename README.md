@@ -7,6 +7,7 @@ RacoGrad is a deep learning framework implemented in Racket, a dialect of the Li
 - **Tensor Operations** — creation, arithmetic, broadcasting, slicing, concatenation, reductions
 - **Activation Functions** — ReLU, Leaky ReLU, ELU, Sigmoid, Tanh, Softplus, Swish (all with derivatives)
 - **Neural Network Layers** — Dense/fully-connected, CNN (Conv2D, MaxPool, Flatten, Softmax)
+- **Transformer Architecture** — Multi-head attention, positional encoding, encoder-decoder, embeddings
 - **Loss Functions** — Mean Squared Error, Cross-Entropy
 - **Training Utilities** — Backpropagation, mini-batch SGD, early stopping, validation splits
 - **Device-Aware Computation** — CPU, GPU (OpenCL), Apple Silicon (MLX), CUDA
@@ -119,6 +120,58 @@ racket test-suite.rkt
 (train-cnn 'mlx 10 64) ; Apple Silicon acceleration
 ```
 
+### Transformer Architecture
+
+```racket
+(require "transformer.rkt")
+
+;; Initialize a full encoder-decoder transformer
+(define model 
+  (initialize-transformer
+    2       ; encoder layers
+    2       ; decoder layers
+    64      ; d_model
+    4       ; num_heads
+    256     ; d_ff (feed-forward dim)
+    100     ; max source length
+    100))   ; max target length
+
+;; Create embeddings for source and target vocabularies
+(define src-embed (initialize-embedding 5000 64))  ; vocab=5000, d_model=64
+(define tgt-embed (initialize-embedding 5000 64))
+
+;; Forward pass with token sequences
+(define src-tokens '(1 42 100 7 3))
+(define tgt-tokens '(1 55 23))
+
+(define src-embedded (embedding-forward src-embed src-tokens))
+(define tgt-embedded (embedding-forward tgt-embed tgt-tokens))
+
+;; Run through transformer
+(define output (transformer-forward model src-embedded tgt-embedded))
+
+;; Project to vocabulary logits
+(define logits (output-projection output (embedding-weights tgt-embed)))
+```
+
+#### Transformer Components
+
+```racket
+;; Multi-head attention (standalone)
+(define mha (initialize-multi-head-attention 64 8))  ; d_model=64, 8 heads
+(define attn-out (multi-head-attention-forward mha query key value mask))
+
+;; Positional encoding
+(define pos-enc (sinusoidal-positional-encoding 100 64))  ; max_len=100, d_model=64
+
+;; Layer normalization
+(define ln (initialize-layer-norm 64))
+(define normalized (layer-norm-forward ln x))
+
+;; Causal mask (for autoregressive decoding)
+(define mask (create-causal-mask 10))  ; 10x10 mask
+```
+
 ## Project Structure
 
 | File | Description |
@@ -127,6 +180,7 @@ racket test-suite.rkt
 | `autograd.rkt` | Activation functions and dense layer forward/backward |
 | `FNN.rkt` | Feedforward neural network with training loop |
 | `CNN.rkt` | Convolutional neural network (LeNet-5) |
+| `transformer.rkt` | Transformer architecture (attention, encoder-decoder) |
 | `device.rkt` | Device abstraction (CPU/GPU/MLX/CUDA) |
 | `tensor_device.rkt` | Device-aware tensor operations |
 | `hardware_detection.rkt` | Auto-detect available hardware |

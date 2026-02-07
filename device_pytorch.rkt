@@ -66,6 +66,10 @@
  t:mean
  t:max
  t:min
+ t:sin
+ t:cos
+ cat
+ stack
  
  ;; Activation functions
  relu
@@ -349,3 +353,35 @@
 (define (make-adam params #:lr [lr 0.001]) ((pt-fn 'pt:make-adam) params #:lr lr))
 (define (opt-step opt) ((pt-fn 'pt:opt-step) opt))
 (define (opt-zero opt) ((pt-fn 'pt:opt-zero) opt))
+
+;; ============================================================
+;; Trigonometric Functions  
+;; ============================================================
+
+(define (t:sin t) ((pt-fn 'pt:sin) t))
+(define (t:cos t) ((pt-fn 'pt:cos) t))
+
+;; ============================================================
+;; Tensor Concatenation
+;; ============================================================
+
+(define (cat tensors #:dim [dim 0]) ((pt-fn 'pt:cat) tensors #:dim dim))
+(define (stack tensors #:dim [dim 0]) ((pt-fn 'pt:stack) tensors #:dim dim))
+
+;; ============================================================
+;; Tensor Type Casting
+;; ============================================================
+
+(provide to-float to-long to-int)
+
+(define (to-float t) ((pt-fn 'pt:float) t))
+(define (to-long t) ((pt-fn 'pt:long) t))
+(define (to-int t) ((pt-fn 'pt:int) t))
+
+;; ============================================================
+;; Tensor Slicing
+;; ============================================================
+
+(provide slice-dim)
+
+(define (slice-dim t dim start end) ((pt-fn 'pt:slice) t dim start end))

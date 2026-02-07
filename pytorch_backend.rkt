@@ -464,3 +464,60 @@ def _opt_zero(opt):
 (define (pt:make-adam params #:lr [lr 0.001]) (py-make-adam params lr))
 (define (pt:opt-step opt) (py-opt-step opt))
 (define (pt:opt-zero opt) (py-opt-zero opt))
+
+;; ============================================================
+;; Trigonometric Functions (for sinusoidal positional encoding)
+;; ============================================================
+
+(provide pt:sin pt:cos)
+
+(define (pt:sin t)
+  (torch.sin t))
+
+(define (pt:cos t)
+  (torch.cos t))
+
+;; ============================================================
+;; Tensor Concatenation
+;; ============================================================
+
+(provide pt:cat pt:stack)
+
+(define (pt:cat tensors #:dim [dim 0])
+  (torch.cat tensors #:dim dim))
+
+(define (pt:stack tensors #:dim [dim 0])
+  (torch.stack tensors #:dim dim))
+
+;; ============================================================
+;; Tensor Type Casting
+;; ============================================================
+
+(provide pt:float pt:long pt:int)
+
+(define (pt:float t)
+  (t .float))
+
+(define (pt:long t)
+  (t .long))
+
+(define (pt:int t)
+  (t .int))
+
+;; ============================================================
+;; Tensor Slicing
+;; ============================================================
+
+(run* "
+def _slice(t, dim, start, end):
+    slices = [slice(None)] * t.dim()
+    slices[dim] = slice(start, end)
+    return t[tuple(slices)]
+")
+
+(define py-slice (run "_slice"))
+
+(provide pt:slice)
+
+(define (pt:slice t dim start end)
+  (py-slice t dim start end))

@@ -324,7 +324,7 @@
 ;; ============================================================
 
 (provide cross-entropy-loss
-         mse-loss
+
          )
 
 (define (cross-entropy-loss logits targets #:ignore-index [ignore-idx -100])
@@ -333,6 +333,19 @@
   ;; Returns scalar loss
   ((pt-fn 'pt:cross-entropy) logits targets #:ignore-index ignore-idx))
 
-(define (mse-loss predictions targets #:reduction [reduction 'mean])
-  ((pt-fn 'pt:mse-loss) predictions targets #:reduction reduction))
 
+;; ============================================================
+;; Training Utilities
+;; ============================================================
+
+(provide backward
+         get-item
+         make-adam
+         opt-step
+         opt-zero)
+
+(define (backward loss) ((pt-fn 'pt:backward) loss))
+(define (get-item tensor) ((pt-fn 'pt:item) tensor))
+(define (make-adam params #:lr [lr 0.001]) ((pt-fn 'pt:make-adam) params #:lr lr))
+(define (opt-step opt) ((pt-fn 'pt:opt-step) opt))
+(define (opt-zero opt) ((pt-fn 'pt:opt-zero) opt))

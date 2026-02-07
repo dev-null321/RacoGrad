@@ -426,3 +426,41 @@ def _causal_mask(seq_len, device=\"cuda\"):
 
 (define (pt:nll-loss log-probs targets #:ignore-index [ignore-idx -100])
   (torch.nn.functional.nll_loss log-probs targets #:ignore_index ignore-idx))
+
+;; ============================================================
+;; Training Utilities (backward, optimizer)
+;; ============================================================
+
+(run* "
+def _backward(t):
+    t.backward()
+    return None
+
+def _item(t):
+    return float(t.item())
+
+def _make_adam(params, lr=0.001):
+    return torch.optim.Adam(params, lr=lr)
+
+def _opt_step(opt):
+    opt.step()
+    return None
+
+def _opt_zero(opt):
+    opt.zero_grad()
+    return None
+")
+
+(define py-backward (run "_backward"))
+(define py-item (run "_item"))  
+(define py-make-adam (run "_make_adam"))
+(define py-opt-step (run "_opt_step"))
+(define py-opt-zero (run "_opt_zero"))
+
+(provide pt:backward pt:item pt:make-adam pt:opt-step pt:opt-zero)
+
+(define (pt:backward loss) (py-backward loss))
+(define (pt:item tensor) (py-item tensor))
+(define (pt:make-adam params #:lr [lr 0.001]) (py-make-adam params lr))
+(define (pt:opt-step opt) (py-opt-step opt))
+(define (pt:opt-zero opt) (py-opt-zero opt))

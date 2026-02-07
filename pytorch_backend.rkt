@@ -793,3 +793,59 @@ def _copy_tensor_data(dst, src):
 
 (define (pt:copy-tensor! dst src)
   ((run "_copy_tensor_data") dst src))
+
+;; ============================================================
+;; GPT-2 Text Generation
+;; ============================================================
+
+(run* "
+def _gpt2_generate(model_forward_fn, input_ids, max_new_tokens=50, temperature=0.8, top_k=40):
+    import torch
+    import torch.nn.functional as F
+    
+    current_ids = input_ids
+    
+    for _ in range(max_new_tokens):
+        # Forward pass through Racket model
+        logits = model_forward_fn(current_ids)
+        
+        # Get logits for last token
+        next_logits = logits[:, -1, :] / temperature
+        
+        # Top-k sampling
+        if top_k is not None:
+            v, _ = torch.topk(next_logits, min(top_k, next_logits.size(-1)))
+            next_logits[next_logits < v[:, [-1]]] = float(-inf)
+        
+        # Sample
+        probs = F.softmax(next_logits, dim=-1)
+        next_token = torch.multinomial(probs, num_samples=1)
+        
+        # Append
+        current_ids = torch.cat([current_ids, next_token], dim=1)
+    
+    return current_ids
+
+def _sample_token(logits, temperature=0.8, top_k=40):
+    import torch
+    import torch.nn.functional as F
+    logits = logits[:, -1, :] / temperature
+    if top_k > 0:
+        values, _ = torch.topk(logits, top_k)
+        min_value = values[:, -1].unsqueeze(-1)
+        logits = torch.where(logits < min_value, torch.full_like(logits, float(\"-inf\")), logits)
+    probs = F.softmax(logits, dim=-1)
+    next_token = torch.multinomial(probs, 1)
+    return next_token.item()
+")
+
+(provide pt:gpt2-generate pt:sample-token)
+
+(define (pt:gpt2-generate forward-fn input-ids 
+                          #:max-tokens [max-tokens 50]
+                          #:temperature [temperature 0.8]
+                          #:top-k [top-k 40])
+  ((run "_gpt2_generate") forward-fn input-ids max-tokens temperature top-k))
+
+(define (pt:sample-token logits #:temperature [temperature 0.8] #:top-k [top-k 40])
+  ((run "_sample_token") logits temperature top-k))

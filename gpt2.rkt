@@ -288,26 +288,65 @@
 ;; Test
 ;; ============================================================
 
+
+;; ============================================================
+;; ============================================================
+;; ============================================================
+;; Text Generation (autoregressive loop in Racket)
+;; ============================================================
+
+(provide gpt2-generate-text)
+
+(define (gpt2-generate-text model prompt 
+                            #:max-tokens [max-tokens 50]
+                            #:temperature [temperature 0.8]
+                            #:top-k [top-k 40])
+  ;; Tokenize prompt - returns [1, seq_len] tensor on GPU
+  (define current-ids (gpt2-tokenize prompt))
+  
+  ;; Autoregressive loop
+  (let loop ([i 0] [ids current-ids])
+    (cond
+      [(>= i max-tokens) 
+       ;; Done - decode and return
+       (gpt2-decode ids)]
+      [else
+       ;; Forward pass (ids is already [1, seq_len])
+       (define logits (gpt2-forward model ids))
+       
+       ;; Sample next token
+       (define next-token ((pt-fn 'pt:sample-token) logits 
+                           #:temperature temperature 
+                           #:top-k top-k))
+       
+       ;; Check for EOS (50256 for GPT-2)
+       (if (= next-token 50256)
+           (gpt2-decode ids)
+           ;; Append token and continue
+           (let* ([next-tensor ((pt-fn 'pt:tensor) (list next-token) 
+                                #:dtype 'long #:device "cuda")]
+                  [next-2d ((pt-fn 'pt:unsqueeze) next-tensor 0)]  ;; [1, 1]
+                  [new-ids ((pt-fn 'pt:cat) (list ids next-2d) #:dim 1)])  ;; cat along dim 1
+             (loop (+ i 1) new-ids)))])))
+
+;; ============================================================
+;; Interactive Demo
+;; ============================================================
+
 (module+ main
-  (displayln "=== RacoGrad GPT-2 ===")
-  (displayln "Creating GPT-2 small (124M params)...")
+  (displayln "=== RacoGrad GPT-2 Text Generation ===")
+  (displayln "Loading model...")
   
   (define model (make-gpt2-small))
-  (displayln "Model created!")
-  
-  ;; Load pretrained weights
   (load-gpt2-weights model "gpt2")
   
-  ;; Test with real text
+  (displayln "Model ready!")
+  (displayln "")
+  
   (define prompt "The meaning of life is")
-  (displayln (format "Prompt: ~a" prompt))
+  (printf "Prompt: ~a\n" prompt)
+  (displayln "Generating...")
   
-  (define input-ids (gpt2-tokenize prompt))
-  (displayln (format "Tokens: ~a" (to-list input-ids)))
-  
-  (define logits (gpt2-forward model input-ids))
-  (printf "Output shape: ~a\n" (shape logits))
-  
-  ;; Get prediction for next token
-  (define last-logits (slice-dim logits 1 (sub1 (cadr (shape logits))) (cadr (shape logits))))
-  (displayln "GPT-2 with pretrained weights works!"))
+  (define output (gpt2-generate-text model prompt #:max-tokens 30))
+  (displayln "")
+  (displayln output))

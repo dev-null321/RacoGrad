@@ -318,3 +318,21 @@
 (define (causal-mask seq-len #:device [dev #f])
   (define d (or dev (current-device)))
   ((pt-fn 'pt:causal-mask) seq-len #:device (device-string d)))
+
+;; ============================================================
+;; Loss Functions
+;; ============================================================
+
+(provide cross-entropy-loss
+         mse-loss
+         )
+
+(define (cross-entropy-loss logits targets #:ignore-index [ignore-idx -100])
+  ;; logits: (batch, seq_len, vocab_size)
+  ;; targets: (batch, seq_len) - integer class indices
+  ;; Returns scalar loss
+  ((pt-fn 'pt:cross-entropy) logits targets #:ignore-index ignore-idx))
+
+(define (mse-loss predictions targets #:reduction [reduction 'mean])
+  ((pt-fn 'pt:mse-loss) predictions targets #:reduction reduction))
+

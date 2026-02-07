@@ -395,3 +395,34 @@ def _causal_mask(seq_len, device=\"cuda\"):
 
 (define (pt:causal-mask seq-len #:device [device "cuda"])
   (py-causal-mask seq-len device))
+
+;; ============================================================
+;; Loss Functions
+;; ============================================================
+
+(provide pt:cross-entropy
+         pt:mse-loss
+         pt:nll-loss)
+
+(define (pt:cross-entropy logits targets #:ignore-index [ignore-idx -100])
+  ;; Reshape for cross_entropy: (N, C) logits, (N,) targets
+  ;; If 3D (batch, seq, vocab), flatten first two dims
+  (define shp (pt:shape logits))
+  (cond
+    [(= (length shp) 3)
+     (define batch (car shp))
+     (define seq (cadr shp))
+     (define vocab (caddr shp))
+     (define flat-logits (torch.reshape logits (list (* batch seq) vocab)))
+     (define flat-targets (torch.reshape targets (list (* batch seq))))
+     (torch.nn.functional.cross_entropy flat-logits flat-targets 
+                                         #:ignore_index ignore-idx)]
+    [else
+     (torch.nn.functional.cross_entropy logits targets 
+                                         #:ignore_index ignore-idx)]))
+
+(define (pt:mse-loss pred target)
+  (torch.nn.functional.mse_loss pred target))
+
+(define (pt:nll-loss log-probs targets #:ignore-index [ignore-idx -100])
+  (torch.nn.functional.nll_loss log-probs targets #:ignore_index ignore-idx))

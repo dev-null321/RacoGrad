@@ -642,3 +642,65 @@ def train_copy_task(vocab_size=16, seq_len=10, d_model=64, nhead=4, num_layers=2
                             #:lr [lr 0.001]
                             #:device [device "cuda"])
   (py-train-copy-task vocab-size seq-len d-model nhead num-layers epochs batches batch-size lr device))
+
+;; ============================================================
+;; Training Utilities: Gradient Clipping, Checkpointing, LR Scheduler
+;; ============================================================
+
+(run* "
+import torch
+import os
+
+def _clip_grad_norm(params, max_norm):
+    return torch.nn.utils.clip_grad_norm_(params, max_norm)
+
+def _save_checkpoint(model, optimizer, epoch, loss, path):
+    torch.save({
+        "epoch": epoch,
+        "loss": loss,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+    }, path)
+    return path
+
+def _load_checkpoint(model, optimizer, path):
+    checkpoint = torch.load(path)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    if optimizer is not None:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    return checkpoint["epoch"], checkpoint["loss"]
+
+def _cosine_lr_scheduler(optimizer, num_warmup, num_training):
+    from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+    warmup = LinearLR(optimizer, start_factor=0.1, total_iters=num_warmup)
+    cosine = CosineAnnealingLR(optimizer, T_max=num_training - num_warmup)
+    return SequentialLR(optimizer, [warmup, cosine], milestones=[num_warmup])
+
+def _step_scheduler(scheduler):
+    scheduler.step()
+    return scheduler.get_last_lr()[0]
+")
+
+(define py-clip-grad (run "_clip_grad_norm"))
+(define py-save-ckpt (run "_save_checkpoint"))
+(define py-load-ckpt (run "_load_checkpoint"))
+(define py-cosine-sched (run "_cosine_lr_scheduler"))
+(define py-step-sched (run "_step_scheduler"))
+
+(provide pt:clip-grad-norm pt:save-checkpoint pt:load-checkpoint 
+         pt:cosine-scheduler pt:step-scheduler)
+
+(define (pt:clip-grad-norm params max-norm)
+  (py-clip-grad params max-norm))
+
+(define (pt:save-checkpoint model optimizer epoch loss path)
+  (py-save-ckpt model optimizer epoch loss path))
+
+(define (pt:load-checkpoint model optimizer path)
+  (py-load-ckpt model optimizer path))
+
+(define (pt:cosine-scheduler optimizer num-warmup num-training)
+  (py-cosine-sched optimizer num-warmup num-training))
+
+(define (pt:step-scheduler scheduler)
+  (py-step-sched scheduler))

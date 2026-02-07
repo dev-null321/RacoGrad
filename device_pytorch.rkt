@@ -385,3 +385,33 @@
 (provide slice-dim)
 
 (define (slice-dim t dim start end) ((pt-fn 'pt:slice) t dim start end))
+
+;; ============================================================
+;; Training Demo (PyTorch-native for proper gradients)
+;; ============================================================
+
+(provide train-copy-task create-py-transformer)
+
+(define (create-py-transformer vocab-size 
+                               #:d-model [d-model 64]
+                               #:nhead [nhead 4]
+                               #:num-layers [num-layers 2]
+                               #:dim-ff [dim-ff 256]
+                               #:max-len [max-len 64])
+  ((pt-fn 'pt:create-transformer) vocab-size 
+   #:d-model d-model #:nhead nhead #:num-layers num-layers
+   #:dim-ff dim-ff #:max-len max-len))
+
+(define (train-copy-task #:vocab-size [vocab-size 16]
+                         #:seq-len [seq-len 10]
+                         #:d-model [d-model 64]
+                         #:nhead [nhead 4]
+                         #:num-layers [num-layers 2]
+                         #:epochs [epochs 20]
+                         #:batches [batches 50]
+                         #:batch-size [batch-size 32]
+                         #:lr [lr 0.001])
+  ((pt-fn 'pt:train-copy-task) 
+   #:vocab-size vocab-size #:seq-len seq-len #:d-model d-model
+   #:nhead nhead #:num-layers num-layers #:epochs epochs
+   #:batches batches #:batch-size batch-size #:lr lr))

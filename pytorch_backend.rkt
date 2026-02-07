@@ -521,3 +521,124 @@ def _slice(t, dim, start, end):
 
 (define (pt:slice t dim start end)
   (py-slice t dim start end))
+
+;; ============================================================
+;; Training with Python-side Model Wrapper
+;; For proper gradient tracking, we wrap the Racket model call in Python
+;; ============================================================
+
+(run* "
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class RacketModelWrapper(nn.Module):
+    def __init__(self, vocab_size, d_model=64, nhead=4, num_layers=2, dim_ff=256, max_len=64):
+        super().__init__()
+        self.src_embed = nn.Embedding(vocab_size, d_model)
+        self.tgt_embed = nn.Embedding(vocab_size, d_model)
+        self.pos_enc = self._create_sinusoidal_pe(max_len, d_model)
+        
+        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_ff, batch_first=True)
+        decoder_layer = nn.TransformerDecoderLayer(d_model, nhead, dim_ff, batch_first=True)
+        
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers)
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers)
+        self.output_proj = nn.Linear(d_model, vocab_size)
+    
+    def _create_sinusoidal_pe(self, max_len, d_model):
+        pe = torch.zeros(max_len, d_model)
+        pos = torch.arange(0, max_len).unsqueeze(1).float()
+        div = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
+        pe[:, 0::2] = torch.sin(pos * div)
+        pe[:, 1::2] = torch.cos(pos * div)
+        return nn.Parameter(pe.unsqueeze(0), requires_grad=False)
+    
+    def forward(self, src, tgt):
+        src_emb = self.src_embed(src) + self.pos_enc[:, :src.size(1)]
+        tgt_emb = self.tgt_embed(tgt) + self.pos_enc[:, :tgt.size(1)]
+        
+        memory = self.encoder(src_emb)
+        tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt.size(1)).to(tgt.device)
+        output = self.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+        return self.output_proj(output)
+
+def create_transformer(vocab_size, d_model=64, nhead=4, num_layers=2, dim_ff=256, max_len=64, device=\"cuda\"):
+    model = RacketModelWrapper(vocab_size, d_model, nhead, num_layers, dim_ff, max_len)
+    return model.to(device)
+
+def train_copy_task(vocab_size=16, seq_len=10, d_model=64, nhead=4, num_layers=2,
+                    epochs=20, batches=50, batch_size=32, lr=0.001, device=\"cuda\"):
+    model = create_transformer(vocab_size, d_model, nhead, num_layers, d_model*4, seq_len*2, device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    
+    print(f\"Training copy task: vocab={vocab_size}, seq_len={seq_len}, d_model={d_model}\")
+    print(f\"Model params: {sum(p.numel() for p in model.parameters()):,}\")
+    
+    for epoch in range(epochs):
+        total_loss = 0
+        correct = 0
+        total = 0
+        
+        for _ in range(batches):
+            # Generate copy data
+            src = torch.randint(1, vocab_size, (batch_size, seq_len), device=device)
+            tgt = src.clone()
+            
+            # Forward
+            logits = model(src, tgt)
+            loss = F.cross_entropy(logits.view(-1, vocab_size), tgt.view(-1))
+            
+            # Backward
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            
+            # Accuracy
+            preds = logits.argmax(dim=-1)
+            correct += (preds == tgt).sum().item()
+            total += tgt.numel()
+        
+        acc = 100 * correct / total
+        print(f\"Epoch {epoch+1}/{epochs} | Loss: {total_loss/batches:.4f} | Acc: {acc:.1f}%\")
+    
+    # Final test
+    print(\"\\nFinal test:\")
+    src = torch.randint(1, vocab_size, (1, seq_len), device=device)
+    with torch.no_grad():
+        logits = model(src, src)
+        pred = logits.argmax(dim=-1)
+    print(f\"Input:  {src[0].tolist()}\")
+    print(f\"Output: {pred[0].tolist()}\")
+    print(f\"Match:  {(src == pred).all().item()}\")
+    
+    return model
+")
+
+(define py-create-transformer (run "create_transformer"))
+(define py-train-copy-task (run "train_copy_task"))
+
+(provide pt:create-transformer pt:train-copy-task)
+
+(define (pt:create-transformer vocab-size 
+                               #:d-model [d-model 64]
+                               #:nhead [nhead 4]
+                               #:num-layers [num-layers 2]
+                               #:dim-ff [dim-ff 256]
+                               #:max-len [max-len 64]
+                               #:device [device "cuda"])
+  (py-create-transformer vocab-size d-model nhead num-layers dim-ff max-len device))
+
+(define (pt:train-copy-task #:vocab-size [vocab-size 16]
+                            #:seq-len [seq-len 10]
+                            #:d-model [d-model 64]
+                            #:nhead [nhead 4]
+                            #:num-layers [num-layers 2]
+                            #:epochs [epochs 20]
+                            #:batches [batches 50]
+                            #:batch-size [batch-size 32]
+                            #:lr [lr 0.001]
+                            #:device [device "cuda"])
+  (py-train-copy-task vocab-size seq-len d-model nhead num-layers epochs batches batch-size lr device))

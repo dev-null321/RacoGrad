@@ -7,7 +7,8 @@
 
 (require "hardware_detection.rkt")
 
-(provide 
+(provide
+ pt-fn 
  ;; Device types and predicates
  my-device?
  cpu-device?
@@ -304,7 +305,8 @@
 ;; Additional ops for attention (added for Step 4)
 ;; ============================================================
 
-(provide triu tril full masked-fill causal-mask)
+(provide
+ pt-fn triu tril full masked-fill causal-mask)
 
 (define (triu t #:diagonal [diagonal 1])
   ((pt-fn 'pt:triu) t #:diagonal diagonal))
@@ -327,7 +329,8 @@
 ;; Loss Functions
 ;; ============================================================
 
-(provide cross-entropy-loss
+(provide
+ pt-fn cross-entropy-loss
 
          )
 
@@ -342,7 +345,8 @@
 ;; Training Utilities
 ;; ============================================================
 
-(provide backward
+(provide
+ pt-fn backward
          get-item
          make-adam
          opt-step
@@ -372,7 +376,8 @@
 ;; Tensor Type Casting
 ;; ============================================================
 
-(provide to-float to-long to-int)
+(provide
+ pt-fn to-float to-long to-int)
 
 (define (to-float t) ((pt-fn 'pt:float) t))
 (define (to-long t) ((pt-fn 'pt:long) t))
@@ -382,7 +387,8 @@
 ;; Tensor Slicing
 ;; ============================================================
 
-(provide slice-dim)
+(provide
+ pt-fn slice-dim)
 
 (define (slice-dim t dim start end) ((pt-fn 'pt:slice) t dim start end))
 
@@ -390,7 +396,8 @@
 ;; Training Demo (PyTorch-native for proper gradients)
 ;; ============================================================
 
-(provide train-copy-task create-py-transformer)
+(provide
+ pt-fn train-copy-task create-py-transformer)
 
 (define (create-py-transformer vocab-size 
                                #:d-model [d-model 64]

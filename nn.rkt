@@ -179,3 +179,46 @@
   (for ([child (nn-module-children m)])
     (print-module child (+ indent 2)))
   (printf "~a)\n" prefix))
+
+
+;; ============================================================
+;; Weight Setters for Loading Pretrained Models
+;; ============================================================
+
+(provide set-linear-weight! set-linear-bias!
+         set-embedding-weight!
+         set-layer-norm-weight! set-layer-norm-bias!
+         nn-module-submodules)
+
+;; Alias for children
+(define nn-module-submodules nn-module-children)
+
+;; Copy src tensor data into dst tensor
+(define (copy-weight! dst-param src-tensor)
+  ((dynamic-require "pytorch_backend.rkt" 'pt:copy-tensor!) 
+   (param-tensor dst-param) src-tensor))
+
+;; For linear: params = (W) or (W b)
+(define (set-linear-weight! linear-module new-weight)
+  (define W (first (nn-module-params linear-module)))
+  (copy-weight! W new-weight))
+
+(define (set-linear-bias! linear-module new-bias)
+  (define params (nn-module-params linear-module))
+  (when (> (length params) 1)
+    (define b (second params))
+    (copy-weight! b new-bias)))
+
+;; For embedding: params = (E)
+(define (set-embedding-weight! emb-module new-weight)
+  (define E (first (nn-module-params emb-module)))
+  (copy-weight! E new-weight))
+
+;; For layer-norm: params = (gamma beta)
+(define (set-layer-norm-weight! ln-module new-weight)
+  (define gamma (first (nn-module-params ln-module)))
+  (copy-weight! gamma new-weight))
+
+(define (set-layer-norm-bias! ln-module new-bias)
+  (define beta (second (nn-module-params ln-module)))
+  (copy-weight! beta new-bias))

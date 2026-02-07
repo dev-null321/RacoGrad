@@ -643,64 +643,153 @@ def train_copy_task(vocab_size=16, seq_len=10, d_model=64, nhead=4, num_layers=2
                             #:device [device "cuda"])
   (py-train-copy-task vocab-size seq-len d-model nhead num-layers epochs batches batch-size lr device))
 
+
 ;; ============================================================
-;; Training Utilities: Gradient Clipping, Checkpointing, LR Scheduler
+;; GPT-2 Weight Loading from HuggingFace
 ;; ============================================================
 
 (run* "
+from transformers import GPT2LMHeadModel
 import torch
-import os
 
-def _clip_grad_norm(params, max_norm):
-    return torch.nn.utils.clip_grad_norm_(params, max_norm)
+_gpt2_cache = {}
 
-def _save_checkpoint(model, optimizer, epoch, loss, path):
-    torch.save({
-        "epoch": epoch,
-        "loss": loss,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-    }, path)
-    return path
+def _load_gpt2_weights(model_name):
+    if model_name not in _gpt2_cache:
+        print(f\"Loading {model_name} from HuggingFace...\")
+        _gpt2_cache[model_name] = GPT2LMHeadModel.from_pretrained(model_name)
+        print(\"Loaded!\")
+    return _gpt2_cache[model_name]
 
-def _load_checkpoint(model, optimizer, path):
-    checkpoint = torch.load(path)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    if optimizer is not None:
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    return checkpoint["epoch"], checkpoint["loss"]
+def _get_gpt2_wte(model_name):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.wte.weight.detach()
 
-def _cosine_lr_scheduler(optimizer, num_warmup, num_training):
-    from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
-    warmup = LinearLR(optimizer, start_factor=0.1, total_iters=num_warmup)
-    cosine = CosineAnnealingLR(optimizer, T_max=num_training - num_warmup)
-    return SequentialLR(optimizer, [warmup, cosine], milestones=[num_warmup])
+def _get_gpt2_wpe(model_name):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.wpe.weight.detach()
 
-def _step_scheduler(scheduler):
-    scheduler.step()
-    return scheduler.get_last_lr()[0]
+def _get_gpt2_ln_f_weight(model_name):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.ln_f.weight.detach()
+
+def _get_gpt2_ln_f_bias(model_name):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.ln_f.bias.detach()
+
+def _get_gpt2_block_ln1_weight(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].ln_1.weight.detach()
+
+def _get_gpt2_block_ln1_bias(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].ln_1.bias.detach()
+
+def _get_gpt2_block_ln2_weight(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].ln_2.weight.detach()
+
+def _get_gpt2_block_ln2_bias(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].ln_2.bias.detach()
+
+def _get_gpt2_block_attn_c_attn_weight(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].attn.c_attn.weight.t().detach()
+
+def _get_gpt2_block_attn_c_attn_bias(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].attn.c_attn.bias.detach()
+
+def _get_gpt2_block_attn_c_proj_weight(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].attn.c_proj.weight.t().detach()
+
+def _get_gpt2_block_attn_c_proj_bias(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].attn.c_proj.bias.detach()
+
+def _get_gpt2_block_mlp_c_fc_weight(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].mlp.c_fc.weight.t().detach()
+
+def _get_gpt2_block_mlp_c_fc_bias(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].mlp.c_fc.bias.detach()
+
+def _get_gpt2_block_mlp_c_proj_weight(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].mlp.c_proj.weight.t().detach()
+
+def _get_gpt2_block_mlp_c_proj_bias(model_name, layer):
+    m = _load_gpt2_weights(model_name)
+    return m.transformer.h[layer].mlp.c_proj.bias.detach()
+
+def _gpt2_tokenize(text, model_name=\"gpt2\"):
+    from transformers import GPT2Tokenizer
+    tok = GPT2Tokenizer.from_pretrained(model_name)
+    return torch.tensor([tok.encode(text)]).cuda()
+
+def _gpt2_decode(ids, model_name=\"gpt2\"):
+    from transformers import GPT2Tokenizer
+    tok = GPT2Tokenizer.from_pretrained(model_name)
+    return tok.decode(ids.tolist() if hasattr(ids, \"tolist\") else ids)
 ")
 
-(define py-clip-grad (run "_clip_grad_norm"))
-(define py-save-ckpt (run "_save_checkpoint"))
-(define py-load-ckpt (run "_load_checkpoint"))
-(define py-cosine-sched (run "_cosine_lr_scheduler"))
-(define py-step-sched (run "_step_scheduler"))
+(provide pt:gpt2-wte pt:gpt2-wpe pt:gpt2-ln-f-weight pt:gpt2-ln-f-bias
+         pt:gpt2-block-ln1-weight pt:gpt2-block-ln1-bias
+         pt:gpt2-block-ln2-weight pt:gpt2-block-ln2-bias
+         pt:gpt2-block-attn-c-attn-weight pt:gpt2-block-attn-c-attn-bias
+         pt:gpt2-block-attn-c-proj-weight pt:gpt2-block-attn-c-proj-bias
+         pt:gpt2-block-mlp-c-fc-weight pt:gpt2-block-mlp-c-fc-bias
+         pt:gpt2-block-mlp-c-proj-weight pt:gpt2-block-mlp-c-proj-bias
+         pt:gpt2-tokenize pt:gpt2-decode)
 
-(provide pt:clip-grad-norm pt:save-checkpoint pt:load-checkpoint 
-         pt:cosine-scheduler pt:step-scheduler)
+(define (pt:gpt2-wte model-name) ((run "_get_gpt2_wte") model-name))
+(define (pt:gpt2-wpe model-name) ((run "_get_gpt2_wpe") model-name))
+(define (pt:gpt2-ln-f-weight model-name) ((run "_get_gpt2_ln_f_weight") model-name))
+(define (pt:gpt2-ln-f-bias model-name) ((run "_get_gpt2_ln_f_bias") model-name))
 
-(define (pt:clip-grad-norm params max-norm)
-  (py-clip-grad params max-norm))
+(define (pt:gpt2-block-ln1-weight model-name layer) ((run "_get_gpt2_block_ln1_weight") model-name layer))
+(define (pt:gpt2-block-ln1-bias model-name layer) ((run "_get_gpt2_block_ln1_bias") model-name layer))
+(define (pt:gpt2-block-ln2-weight model-name layer) ((run "_get_gpt2_block_ln2_weight") model-name layer))
+(define (pt:gpt2-block-ln2-bias model-name layer) ((run "_get_gpt2_block_ln2_bias") model-name layer))
 
-(define (pt:save-checkpoint model optimizer epoch loss path)
-  (py-save-ckpt model optimizer epoch loss path))
+(define (pt:gpt2-block-attn-c-attn-weight model-name layer) 
+  ((run "_get_gpt2_block_attn_c_attn_weight") model-name layer))
+(define (pt:gpt2-block-attn-c-attn-bias model-name layer)
+  ((run "_get_gpt2_block_attn_c_attn_bias") model-name layer))
+(define (pt:gpt2-block-attn-c-proj-weight model-name layer)
+  ((run "_get_gpt2_block_attn_c_proj_weight") model-name layer))
+(define (pt:gpt2-block-attn-c-proj-bias model-name layer)
+  ((run "_get_gpt2_block_attn_c_proj_bias") model-name layer))
 
-(define (pt:load-checkpoint model optimizer path)
-  (py-load-ckpt model optimizer path))
+(define (pt:gpt2-block-mlp-c-fc-weight model-name layer)
+  ((run "_get_gpt2_block_mlp_c_fc_weight") model-name layer))
+(define (pt:gpt2-block-mlp-c-fc-bias model-name layer)
+  ((run "_get_gpt2_block_mlp_c_fc_bias") model-name layer))
+(define (pt:gpt2-block-mlp-c-proj-weight model-name layer)
+  ((run "_get_gpt2_block_mlp_c_proj_weight") model-name layer))
+(define (pt:gpt2-block-mlp-c-proj-bias model-name layer)
+  ((run "_get_gpt2_block_mlp_c_proj_bias") model-name layer))
 
-(define (pt:cosine-scheduler optimizer num-warmup num-training)
-  (py-cosine-sched optimizer num-warmup num-training))
+(define (pt:gpt2-tokenize text [model-name "gpt2"]) 
+  ((run "_gpt2_tokenize") text model-name))
+(define (pt:gpt2-decode ids [model-name "gpt2"])
+  ((run "_gpt2_decode") ids model-name))
 
-(define (pt:step-scheduler scheduler)
-  (py-step-sched scheduler))
+;; ============================================================
+;; Tensor Copy (for weight loading)
+;; ============================================================
+
+(run* "
+def _copy_tensor_data(dst, src):
+    with torch.no_grad():
+        dst.copy_(src)
+    return dst
+")
+
+(provide pt:copy-tensor!)
+
+(define (pt:copy-tensor! dst src)
+  ((run "_copy_tensor_data") dst src))

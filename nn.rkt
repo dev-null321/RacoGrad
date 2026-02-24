@@ -47,6 +47,11 @@
 
 (struct param (name tensor) #:transparent)
 
+;; Constructor that ensures requires_grad
+(define (make-param name tensor)
+  (set-requires-grad! tensor #t)
+  (param name tensor))
+
 ;; ============================================================
 ;; Module Structure
 ;; ============================================================
@@ -108,8 +113,8 @@
 (define (make-linear in-features out-features 
                      #:bias [use-bias #t]
                      #:init [init-fn init-kaiming-uniform])
-  (define W (param "weight" (init-fn (list out-features in-features))))
-  (define b (if use-bias (param "bias" (zeros (list out-features))) #f))
+  (define W (make-param "weight" (init-fn (list out-features in-features))))
+  (define b (if use-bias (make-param "bias" (zeros (list out-features))) #f))
   
   (define (forward-fn input)
     (if b
@@ -124,7 +129,7 @@
 
 (define (make-embedding num-embeddings embedding-dim
                         #:init [init-fn init-xavier-normal])
-  (define E (param "embedding" (init-fn (list num-embeddings embedding-dim))))
+  (define E (make-param "embedding" (init-fn (list num-embeddings embedding-dim))))
   (define (forward-fn indices) (embedding (param-tensor E) indices))
   (nn-module "Embedding" forward-fn (list E) '()))
 
@@ -134,8 +139,8 @@
 
 (define (make-layer-norm normalized-shape #:eps [eps 1e-5])
   (define shape (if (list? normalized-shape) normalized-shape (list normalized-shape)))
-  (define gamma (param "gamma" (ones shape)))
-  (define beta (param "beta" (zeros shape)))
+  (define gamma (make-param "gamma" (ones shape)))
+  (define beta (make-param "beta" (zeros shape)))
   
   (define (forward-fn input)
     (define normed (layer-norm input shape #:eps eps))

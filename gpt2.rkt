@@ -190,7 +190,7 @@
     (define scaled-logits (div last-logits (tensor temperature)))
     
     ;; Greedy: argmax
-    (define next-token (argmax (squeeze scaled-logits #:dim 1) -1))
+    (define next-token (argmax (squeeze scaled-logits 1) -1))
     
     ;; Append to sequence (simplified - just track logits for now)
     ;; Full implementation would concatenate tokens
@@ -314,19 +314,21 @@
        ;; Forward pass (ids is already [1, seq_len])
        (define logits (gpt2-forward model ids))
        
-       ;; Sample next token
-       (define next-token ((pt-fn 'pt:sample-token) logits 
-                           #:temperature temperature 
-                           #:top-k top-k))
-       
+       ;; Greedy sample on libtorch backend
+       (define last-logits (slice-dim logits 1 (sub1 (cadr (shape logits))) (cadr (shape logits))))
+       (define scaled-logits (div last-logits (tensor temperature)))
+       (define next-token-t (argmax (squeeze scaled-logits 1) -1))
+       (define next-token (if (list? (get-item next-token-t))
+                              (car (get-item next-token-t))
+                              (get-item next-token-t)))
+
        ;; Check for EOS (50256 for GPT-2)
        (if (= next-token 50256)
            (gpt2-decode ids)
            ;; Append token and continue
-           (let* ([next-tensor ((pt-fn 'pt:tensor) (list next-token) 
-                                #:dtype 'long #:device "cuda")]
-                  [next-2d ((pt-fn 'pt:unsqueeze) next-tensor 0)]  ;; [1, 1]
-                  [new-ids ((pt-fn 'pt:cat) (list ids next-2d) #:dim 1)])  ;; cat along dim 1
+           (let* ([next-tensor (to-cuda (to-long (tensor (list next-token))))]
+                  [next-2d (unsqueeze next-tensor 0)]
+                  [new-ids (cat (list ids next-2d) #:dim 1)])
              (loop (+ i 1) new-ids)))])))
 
 ;; ============================================================

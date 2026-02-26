@@ -190,7 +190,7 @@
     (define scaled-logits (div last-logits (tensor temperature)))
     
     ;; Greedy: argmax
-    (define next-token (t:max (squeeze scaled-logits #:dim 1) #:dim -1))
+    (define next-token (argmax (squeeze scaled-logits #:dim 1) -1))
     
     ;; Append to sequence (simplified - just track logits for now)
     ;; Full implementation would concatenate tokens

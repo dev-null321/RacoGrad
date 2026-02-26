@@ -459,8 +459,9 @@
 ;; ============================================================
 
 (define (causal-mask seq-len #:device [dev #f])
-  ;; Upper triangular of ones, then masked_fill with -inf
+  ;; Upper triangular boolean mask, then masked_fill with -inf
   (define o (ones (list seq-len seq-len)))
   (define upper (triu o #:diagonal 1))
+  (define upper-mask (eq upper (ones (list seq-len seq-len))))
   (define neg-inf (- (/ 1.0 0.0)))
-  (masked-fill (zeros (list seq-len seq-len)) upper neg-inf))
+  (masked-fill (zeros (list seq-len seq-len)) upper-mask neg-inf))

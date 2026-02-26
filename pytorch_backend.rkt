@@ -849,20 +849,3 @@ def _sample_token(logits, temperature=0.8, top_k=40):
 
 (define (pt:sample-token logits #:temperature [temperature 0.8] #:top-k [top-k 40])
   ((run "_sample_token") logits temperature top-k))
-
-;; ============================================================
-;; Requires Grad
-;; ============================================================
-
-(run* "
-def _set_requires_grad(t, val=True):
-    t.requires_grad_(bool(val))
-    return t
-")
-
-(define py-set-requires-grad (run "_set_requires_grad"))
-
-(provide pt:set-requires-grad!)
-
-(define (pt:set-requires-grad! tensor [val #t])
-  (py-set-requires-grad tensor (if val 1 0)))

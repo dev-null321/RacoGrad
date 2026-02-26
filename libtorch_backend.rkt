@@ -464,8 +464,3 @@
   (define upper (triu o #:diagonal 1))
   (define neg-inf (- (/ 1.0 0.0)))
   (masked-fill (zeros (list seq-len seq-len)) upper neg-inf))
-
-;; t:max — returns argmax indices along dim (compat with old gpt2.rkt usage)
-(provide t:max)
-(define (t:max h #:dim [dim -1])
-  (argmax h dim))

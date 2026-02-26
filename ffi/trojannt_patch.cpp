@@ -1,17 +1,3 @@
-#include <torch/torch.h>
-#include <torch/script.h>
-#include <cstdint>
-#include <string>
-#include <vector>
-#include <unordered_map>
-
-extern std::unordered_map<int64_t, torch::Tensor> tensor_store;
-extern int64_t next_handle;
-extern int64_t store_tensor(torch::Tensor t);
-extern torch::Tensor& get_tensor(int64_t h);
-
-extern "C" {
-
 // TrojaNNt FFI patch — fixes for libtorch 2.5.1 API
 
 // SVD singular values only
@@ -119,7 +105,7 @@ const char* rg_loaded_param_name(int idx) {
         buf = loaded_model_params[idx].first;
         return buf.c_str();
     }
-    return "";
+    return ;
 }
 
 int64_t rg_loaded_param_handle(int idx) {
@@ -127,4 +113,3 @@ int64_t rg_loaded_param_handle(int idx) {
         return loaded_model_params[idx].second;
     return -1;
 }
-} // extern C

@@ -1,7 +1,7 @@
 #lang racket
 
 (require "tensor.rkt")
-(require "deep_learn_library.rkt")
+;; (require "deep_learn_library.rkt") ; not in repo
 
 ;; Create sample data
 ;; X: 2 features, 4 samples

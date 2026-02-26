@@ -1,0 +1,38 @@
+{
+  "model_name": "NousResearch/Meta-Llama-3-8B",
+  "d_model": 4096,
+  "num_layers": 32,
+  "adapter_rank": 64,
+  "adapter_targets": [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj"
+  ],
+  "lr": 0.0001,
+  "num_epochs_per_skill": 5,
+  "batch_size": 2,
+  "seq_len": 128,
+  "grad_accum_steps": 4,
+  "max_grad_norm": 1.0,
+  "num_skills": 4,
+  "skill_rank": 32,
+  "overlap_fraction": 0.3,
+  "reorth_every": 50,
+  "eps_threshold": 0.3,
+  "use_projection": false,
+  "eta_steps": 80,
+  "eta_values": [
+    0.0001,
+    0.0003,
+    0.001,
+    0.003,
+    0.01,
+    0.03,
+    0.1
+  ],
+  "log_every": 5,
+  "eval_every": 25,
+  "save_dir": "ccl_results_llama3/v3/unprojected",
+  "device": "cuda"
+}

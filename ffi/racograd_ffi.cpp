@@ -23,17 +23,17 @@
 // Handle system: opaque pointers to torch::Tensor and Optimizer
 // ============================================================
 
-static std::unordered_map<int64_t, torch::Tensor> tensor_store;
+std::unordered_map<int64_t, torch::Tensor> tensor_store;
 static std::unordered_map<int64_t, std::shared_ptr<torch::optim::Adam>> adam_store;
-static int64_t next_handle = 1;
+int64_t next_handle = 1;
 
-static int64_t store_tensor(torch::Tensor t) {
+int64_t store_tensor(torch::Tensor t) {
     int64_t h = next_handle++;
     tensor_store[h] = std::move(t);
     return h;
 }
 
-static torch::Tensor& get_tensor(int64_t h) {
+torch::Tensor& get_tensor(int64_t h) {
     return tensor_store.at(h);
 }
 

@@ -20,8 +20,14 @@
 
 (define (device-synchronize) (rg-sync))
 
-;; pt-fn was used to dynamically load ops from pytorch_backend.rkt
-;; With libtorch, all ops are directly available. This is a stub
-;; for any code that still references it.
+;; `pt-fn` resolves a named function from pytorch_backend.rkt via
+;; dynamic-require. This is the same mechanism `nn.rkt` uses for
+;; `copy-weight!`, and it's how the weight loaders (gpt2.rkt's
+;; `pt:gpt2-wte`, etc.) are reached without a hard module dependency.
+;;
+;; Tensor ops themselves run through the libtorch backend; pytorch_backend
+;; is only touched for pretrained-weight fetching (transformers via pyffi)
+;; and tensor↔tensor copy. So Python is in the "load weights once" path,
+;; not in the forward / generation path.
 (define (pt-fn name)
-  (error 'pt-fn "pt-fn is deprecated in libtorch backend. Use direct function calls. Requested: ~a" name))
+  (dynamic-require "pytorch_backend.rkt" name))

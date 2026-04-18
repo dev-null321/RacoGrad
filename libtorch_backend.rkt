@@ -17,11 +17,16 @@
  rg-cuda-available?
  rg-cuda-device-name
  rg-sync
+ rg-cuda-empty-cache
+ tensor-free
+ rg-scope-begin
+ rg-scope-end
  
  ;; Tensor creation
  zeros ones randn full arange
  tensor
  tensor-from-list
+ tensor-from-bytes
  
  ;; Tensor info
  shape ndim numel get-item
@@ -62,7 +67,7 @@
  no-grad-begin no-grad-end
  
  ;; Optimizer
- make-adam adam-step adam-zero-grad adam-free
+ make-adam adam-step adam-zero-grad adam-free adam-set-lr!
  
  ;; Misc
  clone t:copy t:print einsum clamp
@@ -100,12 +105,26 @@
 (define-rg rg_cuda_device_name (_fun -> _string))
 (define-rg rg_sync (_fun -> _void))
 (define-rg rg_free_tensor (_fun _handle -> _void))
+(define-rg rg_cuda_empty_cache (_fun -> _void))
+(define-rg rg_scope_begin (_fun -> _int64))
+(define-rg rg_scope_end   (_fun _int64 _pointer _int -> _void))
+
+(define (rg-scope-begin) (rg_scope_begin))
+(define (rg-scope-end watermark protect-handles)
+  ;; protect-handles is a list of int64 handle values to keep
+  (define n (length protect-handles))
+  (define arr (malloc (* n 8) 'atomic))
+  (for ([h protect-handles] [i (in-naturals)])
+    (ptr-set! arr _int64 i h))
+  (rg_scope_end watermark arr n))
 
 (define (rg-init) (= 1 (rg_init)))
 (define (rg-cuda-available?) (= 1 (rg_cuda_available)))
 (define (rg-cuda-device-name) (rg_cuda_device_name))
 (define (rg-sync) (rg_sync))
-(define (free-tensor h) (rg_free_tensor h))
+(define (rg-cuda-empty-cache) (rg_cuda_empty_cache))
+(define (tensor-free h) (rg_free_tensor h))
+(define free-tensor tensor-free)
 
 ;; ============================================================
 ;; Tensor Creation
@@ -119,6 +138,9 @@
 (define-rg rg_tensor_from_float (_fun _double -> _handle))
 (define-rg rg_tensor_from_data (_fun _int _pointer _pointer _int _int -> _handle))
 (define-rg rg_tensor_from_long_data (_fun _int _pointer _pointer _int _int -> _handle))
+(define-rg rg_tensor_from_f32_bytes  (_fun _int _pointer _pointer _int _int -> _handle))
+(define-rg rg_tensor_from_f16_bytes  (_fun _int _pointer _pointer _int _int -> _handle))
+(define-rg rg_tensor_from_bf16_bytes (_fun _int _pointer _pointer _int _int -> _handle))
 
 (define use-cuda 1)  ;; Default: use CUDA if available
 
@@ -173,6 +195,29 @@
            (rg_tensor_from_data ndims dims-ptr data-ptr n use-cuda)))]))
 
 (define (tensor-from-list data) (tensor data))
+
+;; Create a tensor directly from a raw byte buffer.
+;; `bs` is a Racket bytes? with the tensor's packed contents in row-major
+;; layout, little-endian. `dtype` ∈ {'f32 'f16 'bf16}. `shape` is a list
+;; of positive integers. Returned tensor lives on CUDA if CUDA is enabled.
+;;
+;; Used by the native safetensors loader so we don't pay Racket↔FFI
+;; per-element marshalling cost on hundred-MB weight files.
+(define (tensor-from-bytes bs dtype shape)
+  (define n (for/product ([d shape]) d))
+  (define bytes-per-elem
+    (case dtype [(f32) 4] [(f16) 2] [(bf16) 2]
+                [else (error 'tensor-from-bytes "unsupported dtype: ~a" dtype)]))
+  (unless (= (bytes-length bs) (* n bytes-per-elem))
+    (error 'tensor-from-bytes
+           "byte count ~a does not match shape ~a × dtype ~a (expected ~a bytes)"
+           (bytes-length bs) shape dtype (* n bytes-per-elem)))
+  (define-values (dims-ptr ndims) (make-dims-ptr shape))
+  ;; `bs` is a Racket bytes which _pointer-has-type? treats as a raw pointer.
+  (case dtype
+    [(f32)  (rg_tensor_from_f32_bytes  ndims dims-ptr bs n use-cuda)]
+    [(f16)  (rg_tensor_from_f16_bytes  ndims dims-ptr bs n use-cuda)]
+    [(bf16) (rg_tensor_from_bf16_bytes ndims dims-ptr bs n use-cuda)]))
 
 (define (flatten-list lst)
   (cond
@@ -409,7 +454,8 @@
 (define-rg rg_adam_create (_fun _pointer _int _double _double _double _double -> _handle))
 (define-rg rg_adam_step (_fun _handle -> _void))
 (define-rg rg_adam_zero_grad (_fun _handle -> _void))
-(define-rg rg_adam_free (_fun _handle -> _void))
+(define-rg rg_adam_free   (_fun _handle -> _void))
+(define-rg rg_adam_set_lr (_fun _handle _double -> _void))
 
 (define (make-adam param-handles #:lr [lr 0.001] #:beta1 [b1 0.9] #:beta2 [b2 0.999] #:weight-decay [wd 0.0])
   (define n (length param-handles))
@@ -421,6 +467,7 @@
 (define (adam-step h) (rg_adam_step h))
 (define (adam-zero-grad h) (rg_adam_zero_grad h))
 (define (adam-free h) (rg_adam_free h))
+(define (adam-set-lr! h lr) (rg_adam_set_lr h (exact->inexact lr)))
 
 ;; ============================================================
 ;; Misc

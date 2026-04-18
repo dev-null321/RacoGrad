@@ -13,6 +13,7 @@
 #include <torch/torch.h>
 #include <torch/script.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDACachingAllocator.h>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -66,6 +67,37 @@ const char* rg_cuda_device_name() {
 
 void rg_free_tensor(int64_t h) {
     tensor_store.erase(h);
+}
+
+// ── Scope-based tensor cleanup ────────────────────────────────────────────────
+// rg_scope_begin() returns a watermark (current next_handle).
+// rg_scope_end(watermark, protect, n_protect) frees all tensors created since
+// the watermark, except those in the protect list.
+// Call AFTER backward + adam-step + rg_sync so autograd is fully done.
+
+int64_t rg_scope_begin() {
+    return next_handle;
+}
+
+void rg_scope_end(int64_t watermark, const int64_t* protect, int n_protect) {
+    std::unordered_set<int64_t> keep;
+    keep.reserve(n_protect > 0 ? (size_t)n_protect : 0);
+    for (int i = 0; i < n_protect; ++i)
+        keep.insert(protect[i]);
+
+    for (auto it = tensor_store.begin(); it != tensor_store.end(); ) {
+        int64_t h = it->first;
+        if (h >= watermark && keep.find(h) == keep.end())
+            it = tensor_store.erase(it);
+        else
+            ++it;
+    }
+}
+
+void rg_cuda_empty_cache() {
+    if (torch::cuda::is_available()) {
+        c10::cuda::CUDACachingAllocator::emptyCache();
+    }
 }
 
 void rg_sync() {
@@ -137,6 +169,44 @@ int64_t rg_tensor_from_data(int ndims, int64_t* dims, double* data, int nelems, 
 int64_t rg_tensor_from_long_data(int ndims, int64_t* dims, int64_t* data, int nelems, int on_cuda) {
     auto options = torch::TensorOptions().dtype(torch::kLong);
     auto t = torch::from_blob(data, {nelems}, options).clone();
+    std::vector<int64_t> shape(dims, dims + ndims);
+    t = t.reshape(shape);
+    if (on_cuda && torch::cuda::is_available()) t = t.to(torch::kCUDA);
+    return store_tensor(t);
+}
+
+// Load a tensor from a raw float32 byte buffer.
+// `bytes` points to nelems * 4 bytes of little-endian IEEE-754 float32.
+// Used by the native safetensors weight loader; the `rg_tensor_from_data`
+// path above packs Racket doubles and is not suitable for bulk f32 weights.
+int64_t rg_tensor_from_f32_bytes(int ndims, int64_t* dims,
+                                 const void* bytes, int nelems, int on_cuda) {
+    auto options = torch::TensorOptions().dtype(torch::kFloat32);
+    auto t = torch::from_blob(const_cast<void*>(bytes), {nelems}, options).clone();
+    std::vector<int64_t> shape(dims, dims + ndims);
+    t = t.reshape(shape);
+    if (on_cuda && torch::cuda::is_available()) t = t.to(torch::kCUDA);
+    return store_tensor(t);
+}
+
+// Load a tensor from a raw float16 byte buffer (IEEE-754 binary16, LE).
+// `bytes` points to nelems * 2 bytes. Stored as kHalf and (typically) kept
+// on GPU; consumers that want f32 should .to(kFloat32) afterward.
+int64_t rg_tensor_from_f16_bytes(int ndims, int64_t* dims,
+                                 const void* bytes, int nelems, int on_cuda) {
+    auto options = torch::TensorOptions().dtype(torch::kHalf);
+    auto t = torch::from_blob(const_cast<void*>(bytes), {nelems}, options).clone();
+    std::vector<int64_t> shape(dims, dims + ndims);
+    t = t.reshape(shape);
+    if (on_cuda && torch::cuda::is_available()) t = t.to(torch::kCUDA);
+    return store_tensor(t);
+}
+
+// Load a tensor from a raw bfloat16 byte buffer.
+int64_t rg_tensor_from_bf16_bytes(int ndims, int64_t* dims,
+                                  const void* bytes, int nelems, int on_cuda) {
+    auto options = torch::TensorOptions().dtype(torch::kBFloat16);
+    auto t = torch::from_blob(const_cast<void*>(bytes), {nelems}, options).clone();
     std::vector<int64_t> shape(dims, dims + ndims);
     t = t.reshape(shape);
     if (on_cuda && torch::cuda::is_available()) t = t.to(torch::kCUDA);
@@ -519,6 +589,12 @@ void rg_adam_free(int64_t h) {
     adam_store.erase(h);
 }
 
+void rg_adam_set_lr(int64_t h, double lr) {
+    for (auto& group : adam_store.at(h)->param_groups()) {
+        static_cast<torch::optim::AdamOptions&>(group.options()).lr(lr);
+    }
+}
+
 // ============================================================
 // Misc
 // ============================================================
@@ -528,7 +604,13 @@ int64_t rg_clone(int64_t h) {
 }
 
 int64_t rg_copy(int64_t dst, int64_t src) {
-    get_tensor(dst).copy_(get_tensor(src));
+    // Copy under NoGradGuard so we can write into leaf parameters
+    // that have requires_grad=true (e.g. pretrained-weight loading).
+    // Autograd's safety check otherwise refuses to copy_() into a leaf
+    // Variable that requires grad. Using .data.copy_ bypasses this
+    // cleanly and avoids corrupting any in-flight graph.
+    torch::NoGradGuard no_grad;
+    get_tensor(dst).data().copy_(get_tensor(src));
     return dst;
 }
 
@@ -554,7 +636,7 @@ int64_t rg_clamp(int64_t h, double min_val, double max_val) {
 // SVD singular values only
 int64_t rg_svdvals(int64_t h) {
     try {
-        auto sv = torch::linalg::svdvals(get_tensor(h).to(torch::kFloat64), c10::nullopt);
+        auto sv = at::linalg_svdvals(get_tensor(h).to(torch::kFloat64));
         return store_tensor(sv);
     } catch (...) {
         return -1;
@@ -564,7 +646,7 @@ int64_t rg_svdvals(int64_t h) {
 // Full SVD
 int rg_svd_full(int64_t h, int64_t* u_out, int64_t* s_out, int64_t* v_out) {
     try {
-        auto result = torch::linalg::svd(get_tensor(h).to(torch::kFloat64), false, c10::nullopt);
+        auto result = at::linalg_svd(get_tensor(h).to(torch::kFloat64), false);
         *u_out = store_tensor(std::get<0>(result));
         *s_out = store_tensor(std::get<1>(result));
         *v_out = store_tensor(std::get<2>(result));

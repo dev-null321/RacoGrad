@@ -12,6 +12,9 @@
  nn-module
  nn-module?
  nn-module-name
+ nn-module-forward-fn
+ nn-module-children
+ nn-module-params
  forward
  parameters
  
@@ -198,9 +201,12 @@
 ;; Alias for children
 (define nn-module-submodules nn-module-children)
 
-;; Copy src tensor data into dst tensor
+;; Copy src tensor data into dst tensor.
+;; Uses the libtorch-native tensor copy (t:copy → rg_copy → .copy_()) so
+;; no Python / pyffi is required. Both dst-param's backing tensor and
+;; src-tensor are libtorch tensor handles.
 (define (copy-weight! dst-param src-tensor)
-  ((dynamic-require "pytorch_backend.rkt" 'pt:copy-tensor!) 
+  ((dynamic-require "libtorch_backend.rkt" 't:copy)
    (param-tensor dst-param) src-tensor))
 
 ;; For linear: params = (W) or (W b)

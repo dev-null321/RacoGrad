@@ -124,12 +124,18 @@
   (define norm1 (make-layer-norm d-model))
   (define norm2 (make-layer-norm d-model))
   (define norm3 (make-layer-norm d-model))
-  
-  ;; Returns a function that takes (x, encoder-output)
-  (lambda (x encoder-output)
+
+  ;; forward-fn takes a (list x encoder-output) so it fits the nn-module
+  ;; single-argument convention while still accepting both inputs.
+  (define (forward-fn pair)
+    (define x           (first pair))
+    (define encoder-out (second pair))
     (define x1 (add x (forward self-attn (forward norm1 x))))
     (define x2 (add x1 (forward cross-attn (forward norm2 x1))))
-    (add x2 (forward ffn (forward norm3 x2)))))
+    (add x2 (forward ffn (forward norm3 x2))))
+
+  (nn-module "TransformerDecoderLayer" forward-fn '()
+             (list self-attn cross-attn ffn norm1 norm2 norm3)))
 
 ;; ============================================================
 ;; Transformer Encoder
@@ -167,17 +173,31 @@
   (define pos-enc (if sinusoidal
                       (make-sinusoidal-positional-encoding max-len d-model)
                       (make-positional-encoding max-len d-model)))
+  ;; decoder layers return bare lambdas (two inputs); keep them raw
+  ;; but remember them so we can re-expose their params via pseudo-children.
   (define layer-fns (for/list ([_ (in-range num-layers)])
                       (make-transformer-decoder-layer d-model num-heads d-ff
                                                        #:dropout dropout-p)))
   (define final-norm (make-layer-norm d-model))
-  
-  ;; Decoder returns a function taking (x, encoder-output)
-  (lambda (x encoder-output)
+
+  ;; Wrap in an nn-module whose forward-fn accepts (list x encoder-output)
+  ;; so parameter collection can traverse the children. The old two-arg
+  ;; lambda call site becomes (module-apply mod x enc-out).
+  (define (forward-fn pair)
+    (define x            (first pair))
+    (define enc-out      (second pair))
     (define x-pos (forward pos-enc x))
     (define decoded (for/fold ([h x-pos]) ([layer-fn layer-fns])
-                      (layer-fn h encoder-output)))
-    (forward final-norm decoded)))
+                      (if (nn-module? layer-fn)
+                          ((nn-module-forward-fn layer-fn) (list h enc-out))
+                          (layer-fn h enc-out))))
+    (forward final-norm decoded))
+
+  (define children
+    (filter nn-module?
+            (append (list pos-enc) layer-fns (list final-norm))))
+
+  (nn-module "TransformerDecoder" forward-fn '() children))
 
 ;; ============================================================
 ;; Full Transformer
@@ -191,26 +211,52 @@
                           #:max-len [max-len 256]
                           #:dropout [dropout-p 0.1]
                           #:sinusoidal [sinusoidal #t])
-  
+
   (define src-embed (make-embedding src-vocab d-model))
   (define tgt-embed (make-embedding tgt-vocab d-model))
   (define encoder (make-transformer-encoder num-layers d-model num-heads d-ff
-                                             #:max-len max-len 
+                                             #:max-len max-len
                                              #:dropout dropout-p
                                              #:sinusoidal sinusoidal))
-  (define decoder-fn (make-transformer-decoder num-layers d-model num-heads d-ff
-                                                #:max-len max-len 
+  (define decoder-mod (make-transformer-decoder num-layers d-model num-heads d-ff
+                                                #:max-len max-len
                                                 #:dropout dropout-p
                                                 #:sinusoidal sinusoidal))
   (define output-proj (make-linear d-model tgt-vocab))
-  
+
   ;; Returns logits: (batch, seq_len, vocab_size)
-  (lambda (src-tokens tgt-tokens)
+  ;; Wrapped in an nn-module so (parameters model) can walk every
+  ;; submodule — previously we returned a bare lambda, which silently
+  ;; hid every weight from the optimizer.
+  (define (forward-fn pair)
+    (define src-tokens (first pair))
+    (define tgt-tokens (second pair))
     (define src-emb (forward src-embed src-tokens))
     (define tgt-emb (forward tgt-embed tgt-tokens))
     (define enc-out (forward encoder src-emb))
-    (define dec-out (decoder-fn tgt-emb enc-out))
-    (forward output-proj dec-out)))
+    (define dec-out (if (procedure? decoder-mod)
+                        (decoder-mod tgt-emb enc-out)
+                        ((nn-module-forward-fn decoder-mod) (list tgt-emb enc-out))))
+    (forward output-proj dec-out))
+
+  (define children
+    (filter nn-module?
+            (list src-embed tgt-embed encoder decoder-mod output-proj)))
+
+  (define mod (nn-module "Transformer" forward-fn '() children))
+
+  ;; Preserve the two-argument call site (model src tgt) while still
+  ;; exposing the module for parameter collection / training.
+  (define (apply-model . args)
+    (cond
+      [(eq? (first args) 'module) mod]
+      [else (forward-fn args)]))
+  apply-model)
+
+;; Extract the underlying nn-module from a transformer created above,
+;; so training code can call (parameters mod).
+(define (transformer-module t) (t 'module))
+(provide transformer-module)
 
 ;; ============================================================
 ;; Test
